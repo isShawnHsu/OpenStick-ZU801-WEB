@@ -1,0 +1,14 @@
+[Unit]
+Description=UZ801d bridge DHCP/DNS (dnsmasq)
+After=uz801d-ap.service
+Requires=uz801d-ap.service
+# Started on demand by uz801d; do not enable at boot.
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /var/lib/misc
+ExecStart=/usr/sbin/dnsmasq -k --conf-file=/etc/dnsmasq.d/uz801d-ap.conf --pid-file=/run/uz801d-dhcp.pid
+Restart=on-failure
+RestartSec=3
+KillMode=mixed
+NoNewPrivileges=yes

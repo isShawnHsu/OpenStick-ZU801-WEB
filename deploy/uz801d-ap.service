@@ -1,0 +1,13 @@
+[Unit]
+Description=UZ801d bridge hostapd (AP-STA relay)
+After=network.target
+Before=uz801d-dhcp.service
+# Started on demand by uz801d; do not enable at boot.
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/hostapd -P /run/uz801d-ap.pid /etc/hostapd/uz801d-ap.conf
+Restart=on-failure
+RestartSec=3
+KillMode=mixed
+NoNewPrivileges=yes

@@ -1,0 +1,23 @@
+[Unit]
+Description=UZ801 Manager (uz801d)
+Documentation=https://github.com/
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/uz801d -config /etc/uz801d/config.json -state /var/lib/uz801d/state.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+StateDirectory=uz801d
+RuntimeDirectory=uz801d
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelTunables=no
+ProtectControlGroups=no
+PrivateTmp=yes
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
