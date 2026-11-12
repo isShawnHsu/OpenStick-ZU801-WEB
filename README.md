@@ -67,7 +67,7 @@ dnsmasq、iw、nftables 和 systemd，提供蜂窝网络、APN、短信、Wi-Fi 
 | 登录鉴权 | pbkdf2-sha256 密码散列、会话 Cookie、CSRF 校验、登录限流、安全响应头 |
 | 状态总览 | 蜂窝、SIM、热点、桥接、系统资源、流量、接口一览（并发采集） |
 | 蜂窝网络 | 流量开关、飞行模式（关闭蜂窝射频但保留 Wi-Fi）、APN 增删改与保存即连接、网络模式、运营商扫描与注册、USSD、PIN/PUK 解锁、模块重置 |
-| 短信 | 列表/详情/发送/删除、全部已读、未读计数 |
+| 短信 | 列表/详情/发送/删除、全部已读、未读计数、新短信转发到 Bark / 钉钉 / 飞书 |
 | 热点 | SSID、密码、加密方式、信道（仅 2.4 GHz）、隐藏网络、最大客户端、国家代码；支持 nmcli 或 hostapd 后端 |
 | Wi-Fi 桥接 | 未启用蜂窝数据时连接上游 Wi-Fi，同时继续发射本机热点，下游设备经 NAT 共享上游网络 |
 | 客户端 | 在线/离线、信号、收发流量、备注、拉黑（nftables MAC 过滤）、清除离线记录 |
@@ -280,6 +280,28 @@ mmcli -L
 
 部分模块需要先解锁 PIN 才能收发短信。
 
+### 短信转发
+
+在「短信 → 短信转发」中可以把新收到的短信推送到手机或群机器人，支持三种渠道：
+
+| 渠道 | 需要填写 | 说明 |
+| --- | --- | --- |
+| Bark | 服务器地址（默认 `https://api.day.app`）、设备 Key | 可选分组和铃声；支持自建 Bark 服务 |
+| 钉钉 | 机器人 Webhook | 机器人启用「加签」时填写签名密钥 |
+| 飞书 | 机器人 Webhook | 机器人启用「签名校验」时填写签名密钥 |
+
+页面会按所选渠道显示对应的配置步骤，并只展示该渠道需要的字段：Bark 显示设备 Key、分组和铃声；钉钉/飞书显示 Webhook 与签名密钥。切换渠道类型时，地址栏只在仍为默认值时自动切换（Bark 默认 `https://api.day.app`，钉钉/飞书留空等待填写）。
+
+行为说明：
+
+- 只有**保存配置并启用转发后新到达**的短信会被转发，不会补发设备里已有的历史短信；
+- 转发配置与短信列表相互独立：即使模块/SIM 异常导致短信列表或发件箱加载失败，转发设置仍可正常打开、保存和测试；
+- 后台按设定间隔（默认 60 秒，范围 15–3600 秒）轮询模块，通过 `state.json` 中的指纹去重，重启后不会重复推送；
+- 只转发接收方向（`received`）的短信；发送记录不会转发；
+- 每条短信会发往所有「已启用」的渠道，单个渠道失败只记录日志，不影响其他渠道；
+- 「测试」按钮会用表单里当前填写的内容发送一条示例消息（无需先保存），便于先验证 Webhook；
+- Webhook、设备 Key 和签名密钥以明文保存在 `/etc/uz801d/config.json`（0600），备份和导出配置时请注意。
+
 ### Wi-Fi 热点
 
 - UZ801 的板载无线网卡只支持 **2.4 GHz**。页面固定显示 2.4 GHz，信道范围 `0–14`
@@ -455,6 +477,22 @@ mmcli -L
     "quota_bytes": 0,
     "reset_day": 1,
     "enforce_quota": false
+  },
+  "sms": {
+    "forward_enabled": false,
+    "poll_seconds": 60,
+    "providers": [
+      {
+        "name": "我的手机",
+        "type": "bark",              // bark | dingtalk | feishu
+        "enabled": true,
+        "url": "https://api.day.app",
+        "token": "Bark 设备 Key",
+        "secret": "",                // 钉钉/飞书签名密钥（可选）
+        "group": "",                 // Bark 分组（可选）
+        "sound": ""                  // Bark 铃声（可选）
+      }
+    ]
   },
   "system": {
     "allow_reboot": true,
@@ -666,7 +704,7 @@ Windows 下预览界面与 API：
 | GET/POST | `/api/modem`、`/api/modem/connect`、`/api/modem/disconnect` | 蜂窝状态与拨号 |
 | POST/DELETE | `/api/modem/apn`、`/api/modem/apn/{id}/activate`、`/api/modem/apn/{id}` | APN 管理（保存时 `activate=true` 会先保存再立即拨号，拨号失败通过 `connect_error` 返回，配置仍然保留） |
 | POST | `/api/modem/modes`、`/api/modem/scan`、`/api/modem/register`、`/api/modem/ussd`、`/api/modem/pin`、`/api/modem/reset`、`/api/modem/flight` | 模块操作与飞行模式 |
-| GET/POST/DELETE | `/api/sms`、`/api/sms/{id}`、`/api/sms/send`、`/api/sms/read` | 短信（`DELETE /api/sms` 删除全部） |
+| GET/POST/DELETE | `/api/sms`、`/api/sms/{id}`、`/api/sms/send`、`/api/sms/read` | 短信（`DELETE /api/sms` 删除全部）；转发配置见 `GET/POST /api/sms/forward`、`POST /api/sms/forward/test` |
 | GET/POST | `/api/wifi`、`/api/wifi/scan`、`/api/wifi/restart`、`/api/wifi/stop` | 热点 |
 | GET/POST | `/api/bridge`、`/api/bridge/enable`、`/api/bridge/disable`、`/api/bridge/scan` | Wi-Fi 桥接 |
 | GET/POST | `/api/clients`、`/api/clients/block`、`/api/clients/unblock`、`/api/clients/rename`、`/api/clients/forget` | 客户端 |

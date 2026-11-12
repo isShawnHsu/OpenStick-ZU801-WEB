@@ -143,3 +143,51 @@ func TestNormalizeBridgeDefaults(t *testing.T) {
 		t.Errorf("route_metric = %d", c.Wifi.Bridge.RouteMetric)
 	}
 }
+
+func TestSMSForwardNormalizeAndValidate(t *testing.T) {
+	c := Default()
+	c.SMS.ForwardEnabled = true
+	c.SMS.PollSeconds = 0
+	c.SMS.Providers = []SMSForwardTarget{
+		{Type: "Bark", Token: " devkey "},
+		{Type: "dingtalk", URL: "https://oapi.dingtalk.com/robot/send?access_token=abc", Secret: "sec"},
+	}
+	c.Normalize()
+	if c.SMS.PollSeconds != 60 {
+		t.Errorf("poll_seconds = %d, want 60", c.SMS.PollSeconds)
+	}
+	if p := c.SMS.Providers[0]; p.URL != "https://api.day.app" || p.Token != "devkey" || p.Name != "Bark" {
+		t.Errorf("bark provider = %+v", p)
+	}
+	if p := c.SMS.Providers[1]; p.Name != "钉钉" || p.Type != "dingtalk" {
+		t.Errorf("dingtalk provider = %+v", p)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid SMS config rejected: %v", err)
+	}
+}
+
+func TestSMSForwardValidateRejectsBadValues(t *testing.T) {
+	cases := []struct {
+		name string
+		sms  SMSConfig
+	}{
+		{"short interval", SMSConfig{PollSeconds: 5}},
+		{"bad type", SMSConfig{PollSeconds: 60, Providers: []SMSForwardTarget{{Name: "x", Type: "slack", URL: "https://example.com"}}}},
+		{"bad url", SMSConfig{PollSeconds: 60, Providers: []SMSForwardTarget{{Name: "x", Type: "dingtalk", URL: "ftp://example.com"}}}},
+		{"missing bark key", SMSConfig{PollSeconds: 60, Providers: []SMSForwardTarget{{Name: "x", Type: "bark", URL: "https://api.day.app", Token: "bad key!"}}}},
+		{"too many", SMSConfig{PollSeconds: 60, Providers: func() []SMSForwardTarget {
+			out := make([]SMSForwardTarget, 9)
+			for i := range out {
+				out[i] = SMSForwardTarget{Name: "x", Type: "feishu", URL: "https://example.com/hook"}
+			}
+			return out
+		}()}},
+	}
+	for _, tc := range cases {
+		tc.sms.Normalize()
+		if err := tc.sms.Validate(); err == nil {
+			t.Errorf("%s: expected validation error", tc.name)
+		}
+	}
+}

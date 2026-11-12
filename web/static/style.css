@@ -378,6 +378,38 @@ td.row-actions button { margin-left: 4px; }
 }
 .scan-item .btn-row, .op .btn-row { margin: 0; }
 
+/* ------------------------------------------------------------ SMS forward */
+
+.forward-list { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.forward-item {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.forward-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.forward-add { border-top: 1px dashed var(--line); margin-top: 16px; padding-top: 14px; }
+.forward-add h3 { margin: 0; font-size: .95rem; }
+.forward-guide {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.forward-guide .guide-title { font-size: .85rem; color: var(--text); margin-bottom: 6px; }
+.forward-guide ol {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: .84rem;
+  color: var(--muted);
+}
+.forward-guide li { line-height: 1.5; }
+.forward-item .field[hidden], .forward-add .field[hidden] { display: none; }
+
 .sms-item {
   display: flex;
   align-items: flex-start;

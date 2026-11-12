@@ -16,15 +16,28 @@ const currentVersion = 1
 
 // State is the mutable runtime data.
 type State struct {
-	Version   int                    `json:"version"`
-	InstallID string                 `json:"install_id"`
-	Traffic   TrafficState           `json:"traffic"`
-	SMSRead   map[string]int64       `json:"sms_read"`
-	Clients   map[string]ClientEntry `json:"clients"`
-	Blocked   []string               `json:"blocked_macs"`
+	Version    int                    `json:"version"`
+	InstallID  string                 `json:"install_id"`
+	Traffic    TrafficState           `json:"traffic"`
+	SMSRead    map[string]int64       `json:"sms_read"`
+	SMSForward SMSForwardState        `json:"sms_forward"`
+	Clients    map[string]ClientEntry `json:"clients"`
+	Blocked    []string               `json:"blocked_macs"`
 	// QuotaDisconnectedPeriod prevents repeatedly disconnecting within one period.
 	QuotaDisconnectedPeriod string `json:"quota_disconnected_period,omitempty"`
 	UpdatedAt               int64  `json:"updated_at"`
+}
+
+// SMSForwardState remembers which received messages were already forwarded.
+type SMSForwardState struct {
+	// Since is the Unix time when forwarding was enabled; older messages are
+	// ignored so the backlog is not pushed to the operator on first start.
+	Since int64 `json:"since,omitempty"`
+	// Primed is set after the messages that already existed when forwarding
+	// was enabled have been recorded, so they are never forwarded.
+	Primed bool `json:"primed,omitempty"`
+	// Sent maps a message fingerprint to the Unix time it was forwarded.
+	Sent map[string]int64 `json:"sent,omitempty"`
 }
 
 // TrafficState stores cumulative counters and the last raw kernel counters.
@@ -67,12 +80,13 @@ type ClientEntry struct {
 // New returns an empty state with a fresh install ID.
 func New() *State {
 	return &State{
-		Version:   currentVersion,
-		InstallID: newID(),
-		SMSRead:   map[string]int64{},
-		Clients:   map[string]ClientEntry{},
-		Blocked:   []string{},
-		UpdatedAt: time.Now().Unix(),
+		Version:    currentVersion,
+		InstallID:  newID(),
+		SMSRead:    map[string]int64{},
+		SMSForward: SMSForwardState{Sent: map[string]int64{}},
+		Clients:    map[string]ClientEntry{},
+		Blocked:    []string{},
+		UpdatedAt:  time.Now().Unix(),
 	}
 }
 
@@ -105,6 +119,9 @@ func Load(path string) (*State, error) {
 	}
 	if st.SMSRead == nil {
 		st.SMSRead = map[string]int64{}
+	}
+	if st.SMSForward.Sent == nil {
+		st.SMSForward.Sent = map[string]int64{}
 	}
 	if st.Clients == nil {
 		st.Clients = map[string]ClientEntry{}
@@ -269,6 +286,10 @@ func clone(in *State) *State {
 	out.SMSRead = make(map[string]int64, len(in.SMSRead))
 	for k, v := range in.SMSRead {
 		out.SMSRead[k] = v
+	}
+	out.SMSForward.Sent = make(map[string]int64, len(in.SMSForward.Sent))
+	for k, v := range in.SMSForward.Sent {
+		out.SMSForward.Sent[k] = v
 	}
 	out.Clients = make(map[string]ClientEntry, len(in.Clients))
 	for k, v := range in.Clients {

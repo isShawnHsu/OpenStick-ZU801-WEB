@@ -264,7 +264,7 @@ func (s *Server) apiSMSList(w http.ResponseWriter, r *http.Request) {
 			unread++
 		}
 	}
-	ok(w, map[string]any{"messages": list, "unread": unread})
+	ok(w, map[string]any{"messages": list, "unread": unread, "forward": s.m.Config().SMS})
 }
 
 func (s *Server) apiSMSGet(w http.ResponseWriter, r *http.Request) {
@@ -334,6 +334,38 @@ func (s *Server) apiSMSDeleteAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, map[string]bool{"deleted": true})
+}
+
+func (s *Server) apiSMSForwardGet(w http.ResponseWriter, r *http.Request) {
+	ok(w, s.m.Config().SMS)
+}
+
+func (s *Server) apiSMSForwardSave(w http.ResponseWriter, r *http.Request) {
+	var body config.SMSConfig
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.m.SetSMSForwardConfig(body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, map[string]any{"saved": true, "forward": s.m.Config().SMS})
+}
+
+func (s *Server) apiSMSForwardTest(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Provider config.SMSForwardTarget `json:"provider"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.m.TestSMSForward(r.Context(), body.Provider); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, map[string]bool{"sent": true})
 }
 
 // ---------------------------------------------------------------- WiFi

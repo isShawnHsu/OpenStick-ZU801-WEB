@@ -322,7 +322,92 @@ function cellularView(r) {
 
 /* ---------------------------------------------------------------- SMS */
 
-function smsView(r) {
+function smsForwardTypeLabel(type) {
+  if (type === 'dingtalk') return t('sms.forwardDingtalk');
+  if (type === 'feishu') return t('sms.forwardFeishu');
+  return t('sms.forwardBark');
+}
+
+function smsForwardUrlPlaceholder(type) {
+  if (type === 'dingtalk') return t('sms.forwardUrlDingtalk');
+  if (type === 'feishu') return t('sms.forwardUrlFeishu');
+  return t('sms.forwardUrlBark');
+}
+
+// smsForwardDefaultUrl is prefilled when switching channel types, but only if
+// the field still holds the previous default (custom URLs are never overwritten).
+function smsForwardDefaultUrl(type) {
+  return type === 'bark' ? 'https://api.day.app' : '';
+}
+
+// smsForwardGuide renders the setup instructions for the selected channel.
+function smsForwardGuide(type) {
+  var key = 'sms.guideBark', titleKey = 'sms.guideBarkTitle';
+  if (type === 'dingtalk') { key = 'sms.guideDingtalk'; titleKey = 'sms.guideDingtalkTitle'; }
+  else if (type === 'feishu') { key = 'sms.guideFeishu'; titleKey = 'sms.guideFeishuTitle'; }
+  var steps = String(t(key) || '').split('\n').filter(function (line) { return line.trim() !== ''; });
+  return '<div class="forward-guide">' +
+    '<div class="guide-title">' + esc(t(titleKey)) + '</div>' +
+    '<ol>' + steps.map(function (line) {
+      return '<li>' + esc(line.replace(/^\s*\d+[.、]\s*/, '')) + '</li>';
+    }).join('') + '</ol></div>';
+}
+
+function smsForwardTargetForm(p, i) {
+  p = p || {};
+  var type = p.type || 'bark';
+  return '<form data-form="sms-forward-provider" class="forward-item">' +
+    '<input type="hidden" name="index" value="' + attr(i) + '">' +
+    '<div class="forward-head"><strong>' + esc(p.name || smsForwardTypeLabel(type)) + '</strong>' +
+      (p.enabled ? pill(t('common.enabled'), 'ok') : pill(t('common.disabled'), '')) + '</div>' +
+    '<div class="form-grid">' +
+      field(t('sms.forwardType'), sel('type', type, [['bark', t('sms.forwardBark')], ['dingtalk', t('sms.forwardDingtalk')], ['feishu', t('sms.forwardFeishu')]])) +
+      field(t('sms.forwardName'), txt('name', p.name || '', smsForwardTypeLabel(type))) +
+      field(t('sms.forwardUrl'), txt('url', p.url || '', smsForwardUrlPlaceholder(type))) +
+      field(t('sms.forwardToken'), txt('token', p.token || '', 'Bark device key')) +
+      field(t('sms.forwardSecret'), txt('secret', p.secret || '', ''), t('sms.forwardSecretHint')) +
+      field(t('sms.forwardGroup'), txt('group', p.group || '', '')) +
+      field(t('sms.forwardSound'), txt('sound', p.sound || '', '')) +
+    '</div>' +
+    '<div class="forward-guide-wrap">' + smsForwardGuide(type) + '</div>' +
+    '<div class="btn-row">' + check('enabled', p.enabled, t('sms.forwardEnableItem')) +
+      '<button class="primary small" type="submit">' + esc(t('common.save')) + '</button>' +
+      '<button class="ghost small" type="button" data-action="sms-forward-test" data-index="' + attr(i) + '">' + esc(t('sms.forwardTest')) + '</button>' +
+      '<button class="danger small" type="button" data-action="sms-forward-delete" data-index="' + attr(i) + '">' + esc(t('common.delete')) + '</button>' +
+    '</div></form>';
+}
+
+function smsForwardView(fwd, error) {
+  fwd = fwd || {};
+  var providers = fwd.providers || [];
+  var items = providers.map(function (p, i) { return smsForwardTargetForm(p, i); }).join('');
+  var errNote = error ? '<div class="note bad">' + esc(error) + '</div>' : '';
+  return card(t('sms.forward'),
+    errNote +
+    '<form data-form="sms-forward" class="stack">' +
+      check('enabled', fwd.forward_enabled, t('sms.forwardEnable')) +
+      field(t('sms.forwardInterval'), '<input type="number" name="poll_seconds" min="15" max="3600" value="' + attr(fwd.poll_seconds || 60) + '">') +
+      '<p class="muted small">' + esc(t('sms.forwardHint')) + '</p>' +
+      '<button class="primary" type="submit">' + esc(t('common.save')) + '</button>' +
+    '</form>' +
+    '<div class="forward-list">' + (items || '<p class="muted">' + esc(t('sms.forwardEmpty')) + '</p>') + '</div>' +
+    '<form data-form="sms-forward-add" class="stack forward-add">' +
+      '<h3>' + esc(t('sms.forwardAdd')) + '</h3>' +
+      '<div class="form-grid">' +
+        field(t('sms.forwardType'), sel('type', 'bark', [['bark', t('sms.forwardBark')], ['dingtalk', t('sms.forwardDingtalk')], ['feishu', t('sms.forwardFeishu')]])) +
+        field(t('sms.forwardName'), txt('name', '', '')) +
+        field(t('sms.forwardUrl'), txt('url', '', smsForwardUrlPlaceholder('bark'))) +
+        field(t('sms.forwardToken'), txt('token', '', 'Bark device key')) +
+        field(t('sms.forwardSecret'), txt('secret', '', ''), t('sms.forwardSecretHint')) +
+      '</div>' +
+      '<div class="forward-guide-wrap">' + smsForwardGuide('bark') + '</div>' +
+      '<p class="muted small">' + esc(t('sms.forwardAddHint')) + '</p>' +
+      '<div class="btn-row"><button class="primary" type="submit">' + esc(t('sms.forwardAdd')) + '</button></div>' +
+    '</form>');
+}
+
+function smsView(r, smsError, fwdError) {
+  r = r || {};
   var list = r.messages || [];
   var items = list.map(function (m) {
     return '<div class="sms-item' + (m.read ? '' : ' unread') + '">' +
@@ -334,15 +419,25 @@ function smsView(r) {
       '<button class="small danger" data-action="sms-delete" data-id="' + attr(m.id) + '">' + esc(t('common.delete')) + '</button></div></div>';
   }).join('');
 
-  return pageHead(t('sms.title'), r.unread ? r.unread + ' ' + t('sms.unread') : '',
+  var compose = card(t('sms.compose'), '<form data-form="sms" class="stack">' +
+    '<div class="form-grid">' +
+    field(t('sms.number'), '<input type="text" name="number" inputmode="tel" placeholder="+8613800138000" required>') +
+    field(t('sms.text'), '<textarea name="text" rows="4" maxlength="1000" required></textarea>') +
+    '</div><button class="primary" type="submit">' + esc(t('sms.send')) + '</button></form>');
+
+  var smsBlock = smsError
+    ? '<div class="note bad">' + esc(smsError) + '</div>' +
+      '<div class="btn-row"><button data-action="reload">' + esc(t('common.refresh')) + '</button></div>'
+    : compose;
+
+  var actions = smsError ? '' :
     '<button class="ghost" data-action="sms-read-all">' + esc(t('sms.markAll')) + '</button>' +
-    '<button class="danger" data-action="sms-delete-all">' + esc(t('sms.deleteAll')) + '</button>') +
-    card(t('sms.compose'), '<form data-form="sms" class="stack">' +
-      '<div class="form-grid">' +
-      field(t('sms.number'), '<input type="text" name="number" inputmode="tel" placeholder="+8613800138000" required>') +
-      field(t('sms.text'), '<textarea name="text" rows="4" maxlength="1000" required></textarea>') +
-      '</div><button class="primary" type="submit">' + esc(t('sms.send')) + '</button></form>') +
-    card(t('sms.list'), items || '<p class="muted">' + esc(t('sms.empty')) + '</p>');
+    '<button class="danger" data-action="sms-delete-all">' + esc(t('sms.deleteAll')) + '</button>';
+
+  return pageHead(t('sms.title'), r.unread ? r.unread + ' ' + t('sms.unread') : '', actions) +
+    smsBlock +
+    smsForwardView(state.cache.smsForward, fwdError) +
+    (smsError ? '' : card(t('sms.list'), items || '<p class="muted">' + esc(t('sms.empty')) + '</p>'));
 }
 
 /* ---------------------------------------------------------------- WiFi */

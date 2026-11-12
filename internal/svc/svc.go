@@ -71,6 +71,11 @@ type Manager struct {
 	// Guarded by autoMu.
 	autoSuppressed bool
 
+	// smsForwardMu serialises SMS forwarding and guards the error-log throttle.
+	smsForwardMu      sync.Mutex
+	smsForwardLastErr string
+	smsForwardErrAt   time.Time
+
 	stopOnce sync.Once
 	stopCh   chan struct{}
 }
@@ -252,6 +257,7 @@ func (m *Manager) Start(ctx context.Context) {
 	go m.trafficLoop(ctx)
 	go m.autoLoop(ctx)
 	go m.watchdogLoop(ctx)
+	go m.smsForwardLoop(ctx)
 	go m.resumeBridge(ctx)
 	go m.applyFlightModeOnStart(ctx)
 }

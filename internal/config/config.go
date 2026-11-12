@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -31,6 +32,7 @@ type Config struct {
 	Wifi   WifiConfig            `json:"wifi"`
 	LAN    LANConfig             `json:"lan"`
 	Data   DataConfig            `json:"data"`
+	SMS    SMSConfig             `json:"sms"`
 	System SystemConfig          `json:"system"`
 	LEDs   map[string]LEDSetting `json:"leds,omitempty"`
 }
@@ -119,6 +121,25 @@ type DataConfig struct {
 	EnforceQuota bool   `json:"enforce_quota"`
 }
 
+// SMSConfig controls forwarding of received text messages.
+type SMSConfig struct {
+	ForwardEnabled bool               `json:"forward_enabled"`
+	PollSeconds    int                `json:"poll_seconds"`
+	Providers      []SMSForwardTarget `json:"providers"`
+}
+
+// SMSForwardTarget is one webhook destination for forwarded SMS.
+type SMSForwardTarget struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"` // bark | dingtalk | feishu
+	Enabled bool   `json:"enabled"`
+	URL     string `json:"url,omitempty"`
+	Token   string `json:"token,omitempty"`
+	Secret  string `json:"secret,omitempty"`
+	Group   string `json:"group,omitempty"`
+	Sound   string `json:"sound,omitempty"`
+}
+
 // SystemConfig holds safe-operation switches.
 type SystemConfig struct {
 	AllowReboot       bool   `json:"allow_reboot"`
@@ -192,6 +213,10 @@ func Default() *Config {
 			ResetDay:   1,
 			QuotaBytes: 0,
 		},
+		SMS: SMSConfig{
+			PollSeconds: 60,
+			Providers:   []SMSForwardTarget{},
+		},
 		System: SystemConfig{
 			AllowReboot:       true,
 			AllowPoweroff:     true,
@@ -207,6 +232,9 @@ var (
 	ifaceRe   = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,32}$`)
 	apnRe     = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
 	countryRe = regexp.MustCompile(`^[A-Za-z]{2}$`)
+	barkKeyRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,200}$`)
+	// smsURLRe loosely matches an http(s) URL; url.Parse does the real check.
+	smsURLRe = regexp.MustCompile(`^https?://`)
 )
 
 // Load reads cfgPath, starting from defaults so new fields get sane values.
@@ -365,6 +393,7 @@ func (c *Config) Normalize() {
 	if c.Data.ResetDay == 0 {
 		c.Data.ResetDay = 1
 	}
+	c.SMS.Normalize()
 	if c.System.LogLines == 0 {
 		c.System.LogLines = 200
 	}
@@ -535,6 +564,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("流量重置日必须为 1-28")
 	}
 
+	if err := c.SMS.Validate(); err != nil {
+		return err
+	}
+
 	if c.System.LogLines < 10 || c.System.LogLines > 1000 {
 		return fmt.Errorf("日志行数必须为 10-1000")
 	}
@@ -552,6 +585,106 @@ func (c *Config) Validate() error {
 		}
 		if strings.ContainsAny(led.Trigger, "/\\\r\n") || len(led.Trigger) > 64 {
 			return fmt.Errorf("LED 触发器无效: %s", led.Trigger)
+		}
+	}
+	return nil
+}
+
+// Normalize trims SMS forwarding settings and applies safe defaults.
+func (c *SMSConfig) Normalize() {
+	if c.PollSeconds == 0 {
+		c.PollSeconds = 60
+	}
+	if c.Providers == nil {
+		c.Providers = []SMSForwardTarget{}
+	}
+	for i := range c.Providers {
+		c.Providers[i].Normalize()
+	}
+}
+
+// Normalize trims one forwarding target and clears fields that do not apply.
+func (t *SMSForwardTarget) Normalize() {
+	t.Name = strings.TrimSpace(t.Name)
+	t.Type = strings.ToLower(strings.TrimSpace(t.Type))
+	t.URL = strings.TrimRight(strings.TrimSpace(t.URL), "/")
+	t.Token = strings.TrimSpace(t.Token)
+	t.Secret = strings.TrimSpace(t.Secret)
+	t.Group = strings.TrimSpace(t.Group)
+	t.Sound = strings.TrimSpace(t.Sound)
+	if t.Name == "" {
+		t.Name = SMSProviderName(t.Type)
+	}
+	switch t.Type {
+	case "bark":
+		if t.URL == "" {
+			t.URL = "https://api.day.app"
+		}
+		t.Secret = ""
+	case "dingtalk", "feishu":
+		t.Token = ""
+		t.Group = ""
+		t.Sound = ""
+	}
+}
+
+// SMSProviderName returns the display name of a provider type.
+func SMSProviderName(typ string) string {
+	switch typ {
+	case "bark":
+		return "Bark"
+	case "dingtalk":
+		return "钉钉"
+	case "feishu":
+		return "飞书"
+	default:
+		return "Webhook"
+	}
+}
+
+// Validate checks forwarding interval and every configured target.
+func (c *SMSConfig) Validate() error {
+	if c.PollSeconds < 15 || c.PollSeconds > 3600 {
+		return fmt.Errorf("短信转发轮询间隔必须为 15-3600 秒")
+	}
+	if len(c.Providers) > 8 {
+		return fmt.Errorf("短信转发渠道最多 8 个")
+	}
+	for i := range c.Providers {
+		if err := c.Providers[i].Validate(); err != nil {
+			return fmt.Errorf("第 %d 个短信转发渠道: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
+// Validate checks one forwarding target.
+func (t *SMSForwardTarget) Validate() error {
+	switch t.Type {
+	case "bark", "dingtalk", "feishu":
+	default:
+		return fmt.Errorf("渠道类型必须是 bark/dingtalk/feishu")
+	}
+	if n := len([]rune(t.Name)); n < 1 || n > 40 {
+		return fmt.Errorf("渠道名称长度必须为 1-40 个字符")
+	}
+	if len(t.URL) > 500 || strings.ContainsAny(t.URL, "\r\n\x00") || !smsURLRe.MatchString(t.URL) {
+		return fmt.Errorf("地址必须是有效的 http/https URL")
+	}
+	u, err := url.Parse(t.URL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("地址必须是有效的 http/https URL")
+	}
+	if t.Type == "bark" && !barkKeyRe.MatchString(t.Token) {
+		return fmt.Errorf("Bark 设备 Key 无效")
+	}
+	for _, item := range []struct{ name, value string }{
+		{"签名密钥", t.Secret},
+		{"分组", t.Group},
+		{"铃声", t.Sound},
+	} {
+		if len(item.value) > 200 || strings.ContainsAny(item.value, "\r\n\x00") {
+			return fmt.Errorf("%s格式无效", item.name)
 		}
 	}
 	return nil

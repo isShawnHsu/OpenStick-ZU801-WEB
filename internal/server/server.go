@@ -93,6 +93,9 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/sms/{id}", s.protect(s.apiSMSGet))
 	mux.Handle("POST /api/sms/send", s.protect(s.apiSMSSend))
 	mux.Handle("POST /api/sms/read", s.protect(s.apiSMSRead))
+	mux.Handle("POST /api/sms/forward", s.protect(s.apiSMSForwardSave))
+	mux.Handle("GET /api/sms/forward", s.protect(s.apiSMSForwardGet))
+	mux.Handle("POST /api/sms/forward/test", s.protect(s.apiSMSForwardTest))
 	mux.Handle("DELETE /api/sms/{id}", s.protect(s.apiSMSDelete))
 	mux.Handle("DELETE /api/sms", s.protect(s.apiSMSDeleteAll))
 

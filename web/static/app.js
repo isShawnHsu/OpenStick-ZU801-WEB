@@ -86,6 +86,50 @@ function setValue(name, value) {
   if (el) el.value = value;
 }
 
+// smsForwardPayload builds the API body from the cached forwarding settings.
+function smsForwardPayload(cfg, providers) {
+  cfg = cfg || {};
+  return {
+    forward_enabled: !!cfg.forward_enabled,
+    poll_seconds: parseInt(cfg.poll_seconds, 10) || 60,
+    providers: providers || []
+  };
+}
+
+// syncSmsForwardForm shows only the fields and guide that belong to the chosen
+// channel: Bark uses the device key/group/sound, DingTalk and Feishu use a
+// webhook plus an optional signing secret.
+function syncSmsForwardForm(form, type) {
+  type = type || 'bark';
+  var bark = type === 'bark';
+  var url = form.querySelector('input[name="url"]');
+  if (url) {
+    var prevType = form.dataset.forwardType || type;
+    var prevDefault = smsForwardDefaultUrl(prevType);
+    if (url.value === '' || url.value === prevDefault) url.value = smsForwardDefaultUrl(type);
+    url.placeholder = smsForwardUrlPlaceholder(type);
+  }
+  form.dataset.forwardType = type;
+  ['token', 'group', 'sound'].forEach(function (name) {
+    var el = form.querySelector('[name="' + name + '"]');
+    var box = el && el.closest('.field');
+    if (box) box.hidden = !bark;
+  });
+  var secret = form.querySelector('[name="secret"]');
+  var secretBox = secret && secret.closest('.field');
+  if (secretBox) secretBox.hidden = bark;
+  var guide = form.querySelector('.forward-guide-wrap');
+  if (guide) guide.innerHTML = smsForwardGuide(type);
+}
+
+function initSmsForwardForms(root) {
+  if (!root) return;
+  root.querySelectorAll('form[data-form="sms-forward-provider"], form[data-form="sms-forward-add"]').forEach(function (form) {
+    var selEl = form.querySelector('select[name="type"]');
+    if (selEl) syncSmsForwardForm(form, selEl.value);
+  });
+}
+
 function topStatusText() {
   var d = state.last;
   if (!d) return '';
@@ -192,9 +236,25 @@ async function loadPage(page, silent) {
       state.cache.modem = c;
       html = cellularView(c);
     } else if (page === 'sms') {
-      var s = await api('/api/sms');
-      state.cache.sms = s.messages || [];
-      html = smsView(s);
+      var smsData = null, smsError = '', fwdError = '';
+      try {
+        smsData = await api('/api/sms');
+        state.cache.sms = smsData.messages || [];
+        if (smsData.forward) state.cache.smsForward = smsData.forward;
+      } catch (e) {
+        if (e.status === 401) throw e;
+        smsError = e.message || t('common.error');
+      }
+      // Forwarding settings do not depend on the modem, so load them even when
+      // the message list cannot be read (no modem, no SIM, mmcli failure...).
+      try {
+        state.cache.smsForward = await api('/api/sms/forward');
+      } catch (e) {
+        if (e.status === 401) throw e;
+        if (!state.cache.smsForward) fwdError = e.message || t('common.error');
+      }
+      if (!smsData && fwdError) throw new Error(smsError || fwdError);
+      html = smsView(smsData || {}, smsError, fwdError);
     } else if (page === 'wifi') {
       var w = await api('/api/wifi');
       state.cache.wifiConfig = w.config || {};
@@ -221,7 +281,10 @@ async function loadPage(page, silent) {
     }
     if (seq !== state.seq) return;
     var main = document.getElementById('main');
-    if (main) main.innerHTML = html;
+    if (main) {
+      main.innerHTML = html;
+      if (page === 'sms') initSmsForwardForms(main);
+    }
     updateChrome();
     schedule(page);
     if (enteredNetwork) autoPing();
@@ -511,6 +574,38 @@ async function handleAction(el) {
       await act(el, async function () {
         if (!confirmBox(t('sms.deleteAllConfirm'))) return;
         await api('/api/sms?confirm=yes', { method: 'DELETE' });
+        await refresh();
+      });
+      return;
+    case 'sms-forward-test':
+      await act(el, async function () {
+        var provider = null;
+        var form = el.closest('form');
+        if (form && form.dataset.form === 'sms-forward-provider') {
+          var d = formObject(form);
+          provider = {
+            name: d.name, type: d.type, enabled: true,
+            url: d.url, token: d.token, secret: d.secret, group: d.group, sound: d.sound
+          };
+        }
+        if (!provider) {
+          var fwd = state.cache.smsForward || {};
+          provider = (fwd.providers || [])[parseInt(el.dataset.index, 10)];
+        }
+        if (!provider) return;
+        toast(t('common.working'));
+        await api('/api/sms/forward/test', { method: 'POST', body: { provider: provider } });
+        toast(t('sms.forwardTestOk'));
+      });
+      return;
+    case 'sms-forward-delete':
+      await act(el, async function () {
+        if (!confirmBox(t('sms.forwardDeleteConfirm'))) return;
+        var fwd = state.cache.smsForward || {};
+        var providers = (fwd.providers || []).slice();
+        providers.splice(parseInt(el.dataset.index, 10), 1);
+        await api('/api/sms/forward', { method: 'POST', body: smsForwardPayload(fwd, providers) });
+        toast(t('common.saved'));
         await refresh();
       });
       return;
@@ -814,6 +909,51 @@ async function handleSubmit(ev) {
       });
       return;
     }
+    if (kind === 'sms-forward') {
+      await act(btn, async function () {
+        var fwd = state.cache.smsForward || {};
+        var payload = smsForwardPayload(fwd, fwd.providers || []);
+        payload.forward_enabled = !!d.enabled;
+        payload.poll_seconds = parseInt(d.poll_seconds, 10) || 60;
+        var res = await api('/api/sms/forward', { method: 'POST', body: payload });
+        state.cache.smsForward = res.forward || payload;
+        toast(t('common.saved'));
+        await refresh();
+      });
+      return;
+    }
+    if (kind === 'sms-forward-provider') {
+      await act(btn, async function () {
+        var fwd = state.cache.smsForward || {};
+        var providers = (fwd.providers || []).slice();
+        var idx = parseInt(d.index, 10);
+        if (!providers[idx]) return;
+        providers[idx] = {
+          name: d.name, type: d.type, enabled: !!d.enabled,
+          url: d.url, token: d.token, secret: d.secret, group: d.group, sound: d.sound
+        };
+        var res = await api('/api/sms/forward', { method: 'POST', body: smsForwardPayload(fwd, providers) });
+        state.cache.smsForward = res.forward || {};
+        toast(t('common.saved'));
+        await refresh();
+      });
+      return;
+    }
+    if (kind === 'sms-forward-add') {
+      await act(btn, async function () {
+        var fwd = state.cache.smsForward || {};
+        var providers = (fwd.providers || []).slice();
+        providers.push({
+          name: d.name, type: d.type, enabled: true,
+          url: d.url, token: d.token, secret: d.secret
+        });
+        var res = await api('/api/sms/forward', { method: 'POST', body: smsForwardPayload(fwd, providers) });
+        state.cache.smsForward = res.forward || {};
+        toast(t('common.saved'));
+        await refresh();
+      });
+      return;
+    }
     if (kind === 'wifi') {
       await act(btn, async function () {
         toast(t('common.working'));
@@ -923,6 +1063,13 @@ function bindEvents() {
     handleAction(el);
   });
   document.addEventListener('submit', handleSubmit);
+  document.addEventListener('change', function (ev) {
+    var el = ev.target;
+    if (!el || el.name !== 'type') return;
+    var form = el.closest('form[data-form="sms-forward-provider"], form[data-form="sms-forward-add"]');
+    if (!form) return;
+    syncSmsForwardForm(form, el.value);
+  });
   document.addEventListener('input', function (ev) {
     var el = ev.target;
     if (!el || el.name !== 'host') return;
