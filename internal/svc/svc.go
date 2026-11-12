@@ -64,7 +64,7 @@ type Manager struct {
 	// autoMu serialises the cellular-data/bridge automatic state machine.
 	autoMu sync.Mutex
 	// bridgeRetryAfter blocks automatic bridge retries until the given time
-	// after a failed start or an upstream timeout. Guarded by autoMu.
+	// after a failed start. Guarded by autoMu.
 	bridgeRetryAfter time.Time
 	// autoSuppressed is set after an explicit "stop hotspot" so the automatic
 	// state machine does not bring the AP or the bridge back on the next tick.

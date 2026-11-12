@@ -120,10 +120,9 @@ func (m *Manager) BridgeCapability(ctx context.Context) BridgeCapability {
 	return caps
 }
 
-// bridgeUpstreamGrace is how long the relay may stay up without a working
-// upstream WiFi before it is shut down automatically, and the cool-down before
-// the automatic state machine tries again.
-const bridgeUpstreamGrace = 5 * time.Minute
+// bridgeAutoRetryDelay is the cool-down before the automatic state machine
+// retries a failed bridge start.
+const bridgeAutoRetryDelay = 5 * time.Minute
 
 // EnableBridge starts the RaspAP-style AP-STA relay. On failure the previous
 // access point is restored so the device does not disappear from the LAN.
@@ -567,7 +566,7 @@ func (m *Manager) resumeBridge(ctx context.Context) {
 
 // autoStep enables the relay while cellular data is off and always stops it
 // when cellular data becomes active. A failed automatic start backs off for
-// bridgeUpstreamGrace instead of retrying on every tick.
+// bridgeAutoRetryDelay instead of retrying on every tick.
 func (m *Manager) autoStep(ctx context.Context) {
 	m.autoMu.Lock()
 	defer m.autoMu.Unlock()
@@ -604,14 +603,14 @@ func (m *Manager) autoStep(ctx context.Context) {
 		}
 		m.log.Printf("蜂窝数据未启用，自动启用 WiFi 桥接")
 		if err := m.EnableBridge(ctx); err != nil {
-			m.log.Printf("自动启用桥接失败: %v，%s 后重试", err, bridgeUpstreamGrace)
-			m.bridgeRetryAfter = time.Now().Add(bridgeUpstreamGrace)
+			m.log.Printf("自动启用桥接失败: %v，%s 后重试", err, bridgeAutoRetryDelay)
+			m.bridgeRetryAfter = time.Now().Add(bridgeAutoRetryDelay)
 		}
 	}
 }
 
 // AllowBridgeRetry clears the automatic back-off so a manual start is
-// attempted immediately, even right after an upstream timeout.
+// attempted immediately, even right after a failed automatic start.
 func (m *Manager) AllowBridgeRetry() {
 	m.autoMu.Lock()
 	m.bridgeRetryAfter = time.Time{}
@@ -668,14 +667,8 @@ func (m *Manager) watchdogStep(ctx context.Context) {
 	downFor := now.Sub(m.bridge.UpstreamDownSince)
 	m.bridgeMu.Unlock()
 
-	if downFor >= bridgeUpstreamGrace {
-		m.log.Printf("上游 WiFi 已中断 %s，自动停用桥接", downFor.Round(time.Second))
-		m.bridgeRetryAfter = now.Add(bridgeUpstreamGrace)
-		if err := m.DisableBridge(ctx); err != nil {
-			m.log.Printf("自动停用桥接失败: %v", err)
-		}
-		return
-	}
+	// Keep the relay up and keep retrying the upstream connection however long
+	// it has been down; only the operator or cellular data may stop the bridge.
 	m.log.Printf("上游 WiFi 无地址（已 %s），尝试重新连接", downFor.Round(time.Second))
 	_, _ = m.Run(ctx, 45*time.Second, "nmcli", "connection", "up", cfg.Wifi.Bridge.UpstreamConnection)
 }
