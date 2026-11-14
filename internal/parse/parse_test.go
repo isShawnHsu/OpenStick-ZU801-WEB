@@ -51,6 +51,40 @@ func TestParseModemPIN2IsNotBlocking(t *testing.T) {
 	}
 }
 
+func TestParseModemUeMode(t *testing.T) {
+	// ModemManager 1.18 exposes ue-mode-operation under 3gpp.eps.
+	data := []byte(`{"modem":{"generic":{},"3gpp":{"eps":{"ue-mode-operation":"ps-1"}}}}`)
+	info, err := ParseModem(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.UeMode != "ps-1" {
+		t.Fatalf("UeMode = %q, want ps-1", info.UeMode)
+	}
+	if !IsPSOnlyUeMode(info.UeMode) {
+		t.Fatal("ps-1 must be detected as PS-only")
+	}
+	if !IsPSOnlyUeMode("PS-2") {
+		t.Fatal("PS-2 must be detected as PS-only")
+	}
+	if IsPSOnlyUeMode("cs-ps-1") || IsPSOnlyUeMode("cs-ps-2") {
+		t.Fatal("cs-ps modes are not PS-only")
+	}
+	if IsPSOnlyUeMode("") {
+		t.Fatal("empty mode must not be PS-only")
+	}
+
+	// Older/other shapes: key directly under 3gpp.
+	data = []byte(`{"modem":{"generic":{},"3gpp":{"ue-mode-operation":"cs-ps-2"}}}`)
+	info, err = ParseModem(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.UeMode != "cs-ps-2" || IsPSOnlyUeMode(info.UeMode) {
+		t.Fatalf("UeMode = %q, want cs-ps-2 (not PS-only)", info.UeMode)
+	}
+}
+
 func TestParseModem(t *testing.T) {
 	data := []byte(`{
 	  "modem": {

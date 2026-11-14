@@ -283,7 +283,15 @@ func (s *Server) apiSMSList(w http.ResponseWriter, r *http.Request) {
 			unread++
 		}
 	}
-	ok(w, map[string]any{"messages": list, "unread": unread, "available": true, "forward": s.m.Config().SMS})
+	resp := map[string]any{"messages": list, "unread": unread, "available": true, "forward": s.m.Config().SMS}
+	// A PS-only modem can list messages but can never receive or send them
+	// over LTE, so surface the reason even on the success path.
+	if code, reason := s.m.SMSUnavailable(r.Context()); code != "" {
+		resp["available"] = false
+		resp["reason_code"] = code
+		resp["reason"] = reason
+	}
+	ok(w, resp)
 }
 
 func (s *Server) apiSMSGet(w http.ResponseWriter, r *http.Request) {

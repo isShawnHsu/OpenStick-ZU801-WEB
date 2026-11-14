@@ -933,6 +933,8 @@ func (m *Manager) SMSUnavailable(ctx context.Context) (code, reason string) {
 		return "flight_mode", "飞行模式已开启，短信功能不可用"
 	case !st.SIMPresent:
 		return "no_sim", "未检测到 SIM 卡，短信功能不可用"
+	case st.Info != nil && parse.IsPSOnlyUeMode(st.Info.UeMode):
+		return "ps_only", "当前模块/卡为纯数据（PS-only）模式：LTE 收短信需要 CS/SGS，收发均不可用"
 	}
 	return "", ""
 }

@@ -35,6 +35,8 @@ type ModemInfo struct {
 	UnlockRequired   string   `json:"unlock_required"`
 	UnlockNote       string   `json:"unlock_note"`
 	UnlockRetries    string   `json:"unlock_retries"`
+	// UeMode is ModemManager's "ue mode of operation" (ps-1, ps-2, cs-ps-1, cs-ps-2).
+	UeMode string `json:"ue_mode,omitempty"`
 	SimPath          string   `json:"sim_path"`
 	OwnNumbers       []string `json:"own_numbers"`
 	Bearers          []string `json:"bearers"`
@@ -54,6 +56,14 @@ func IsNonBlockingUnlock(lock string) bool {
 		return true
 	}
 	return false
+}
+
+// IsPSOnlyUeMode reports whether the modem is configured for packet-switched
+// service only. In that mode the CS domain never attaches, so SMS cannot be
+// delivered over LTE (which needs CS fallback / SGs or IMS).
+func IsPSOnlyUeMode(mode string) bool {
+	m := strings.ToLower(strings.TrimSpace(mode))
+	return strings.HasPrefix(m, "ps-")
 }
 
 // SignalValues contains extended signal measurements.
@@ -258,6 +268,11 @@ func ParseModem(data []byte) (*ModemInfo, error) {
 	if IsNonBlockingUnlock(info.UnlockRequired) {
 		info.UnlockNote = info.UnlockRequired
 		info.UnlockRequired = ""
+	}
+	// UE mode of operation lives under 3gpp.eps on MM 1.18+; tolerate both shapes.
+	info.UeMode = asString(get(t, "eps", "ue-mode-operation"))
+	if info.UeMode == "" {
+		info.UeMode = asString(get(t, "ue-mode-operation"))
 	}
 	// current-modes is a plain string in ModemManager, but be tolerant.
 	switch v := g["current-modes"].(type) {
