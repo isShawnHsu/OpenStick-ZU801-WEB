@@ -89,6 +89,8 @@ type WifiConfig struct {
 
 // BridgeConfig controls the RaspAP-style AP-STA WiFi relay.
 type BridgeConfig struct {
+	Mode                 string `json:"mode"`                 // usb | ap_sta
+	DownstreamInterface  string `json:"downstream_interface"` // usb0
 	Enabled              bool   `json:"enabled"`
 	Auto                 bool   `json:"auto"`
 	Force                bool   `json:"force"`
@@ -147,6 +149,14 @@ type SystemConfig struct {
 	AllowFactoryReset bool   `json:"allow_factory_reset"`
 	LogLines          int    `json:"log_lines"`
 	FrpcLogPath       string `json:"frpc_log_path"`
+
+	// LED power control. LEDOff always wins; the schedule only applies when
+	// LEDOff is false. Times use the device's local timezone in HH:MM form.
+	LEDOff             bool                  `json:"led_off"`
+	LEDScheduleEnabled bool                  `json:"led_schedule_enabled"`
+	LEDOffTime         string                `json:"led_off_time"`
+	LEDOnTime          string                `json:"led_on_time"`
+	LEDSnapshot        map[string]LEDSetting `json:"led_snapshot,omitempty"`
 }
 
 // LEDSetting is a persisted LED trigger state.
@@ -194,10 +204,12 @@ func Default() *Config {
 			DNSMasqConfig: "/etc/dnsmasq.d/uz801d.conf",
 			ApplyOnStart:  true,
 			Bridge: BridgeConfig{
-				Auto:               true,
-				UpstreamSecurity:   "wpa2",
-				UpstreamConnection: "uz801d-upstream",
-				RouteMetric:        50,
+				Mode:                "usb",
+				DownstreamInterface: "usb0",
+				Auto:                true,
+				UpstreamSecurity:    "wpa2",
+				UpstreamConnection:  "uz801d-upstream",
+				RouteMetric:         50,
 			},
 		},
 		LAN: LANConfig{
@@ -222,6 +234,8 @@ func Default() *Config {
 			AllowPoweroff:     true,
 			AllowFactoryReset: true,
 			LogLines:          200,
+			LEDOffTime:        "22:00",
+			LEDOnTime:         "07:00",
 		},
 		LEDs: map[string]LEDSetting{},
 	}
@@ -348,6 +362,14 @@ func (c *Config) Normalize() {
 	if c.Wifi.DNSMasqConfig == "" {
 		c.Wifi.DNSMasqConfig = "/etc/dnsmasq.d/uz801d.conf"
 	}
+	c.Wifi.Bridge.Mode = strings.ToLower(strings.TrimSpace(c.Wifi.Bridge.Mode))
+	if c.Wifi.Bridge.Mode == "" {
+		c.Wifi.Bridge.Mode = "usb"
+	}
+	c.Wifi.Bridge.DownstreamInterface = strings.TrimSpace(c.Wifi.Bridge.DownstreamInterface)
+	if c.Wifi.Bridge.DownstreamInterface == "" {
+		c.Wifi.Bridge.DownstreamInterface = "usb0"
+	}
 	c.Wifi.Bridge.UpstreamSSID = strings.TrimSpace(c.Wifi.Bridge.UpstreamSSID)
 	c.Wifi.Bridge.UpstreamSecurity = strings.ToLower(strings.TrimSpace(c.Wifi.Bridge.UpstreamSecurity))
 	c.Wifi.Bridge.APInterface = strings.TrimSpace(c.Wifi.Bridge.APInterface)
@@ -398,9 +420,22 @@ func (c *Config) Normalize() {
 		c.System.LogLines = 200
 	}
 	c.System.FrpcLogPath = strings.TrimSpace(c.System.FrpcLogPath)
+	c.System.LEDOffTime = normalizeClock(c.System.LEDOffTime, "22:00")
+	c.System.LEDOnTime = normalizeClock(c.System.LEDOnTime, "07:00")
 	if c.LEDs == nil {
 		c.LEDs = map[string]LEDSetting{}
 	}
+}
+
+func normalizeClock(s, def string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return def
+	}
+	if t, err := time.Parse("15:04", s); err == nil {
+		return t.Format("15:04")
+	}
+	return s
 }
 
 // Validate checks all values that eventually reach shell commands or config files.
@@ -513,6 +548,19 @@ func (c *Config) Validate() error {
 	if c.Wifi.Country != "" && !countryRe.MatchString(c.Wifi.Country) {
 		return fmt.Errorf("国家代码必须是两位字母")
 	}
+	switch c.Wifi.Bridge.Mode {
+	case "usb", "ap_sta":
+	default:
+		return fmt.Errorf("桥接模式无效")
+	}
+	if c.Wifi.Bridge.DownstreamInterface != "" {
+		if !ifaceRe.MatchString(c.Wifi.Bridge.DownstreamInterface) {
+			return fmt.Errorf("下游接口名称无效")
+		}
+		if c.Wifi.Bridge.DownstreamInterface == c.Wifi.Interface {
+			return fmt.Errorf("下游接口不能与上游无线网卡相同")
+		}
+	}
 	if c.Wifi.Bridge.APInterface != "" && c.Wifi.Bridge.APInterface != "uap0" && !ifaceRe.MatchString(c.Wifi.Bridge.APInterface) {
 		return fmt.Errorf("桥接 AP 网卡名称无效")
 	}
@@ -570,6 +618,12 @@ func (c *Config) Validate() error {
 
 	if c.System.LogLines < 10 || c.System.LogLines > 1000 {
 		return fmt.Errorf("日志行数必须为 10-1000")
+	}
+	if _, err := time.Parse("15:04", c.System.LEDOffTime); err != nil {
+		return fmt.Errorf("LED 关闭时间格式无效，应为 HH:MM")
+	}
+	if _, err := time.Parse("15:04", c.System.LEDOnTime); err != nil {
+		return fmt.Errorf("LED 开启时间格式无效，应为 HH:MM")
 	}
 	if p := c.System.FrpcLogPath; p != "" {
 		if len(p) > 300 || strings.ContainsAny(p, "\r\n\x00") {

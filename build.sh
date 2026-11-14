@@ -1,5 +1,5 @@
 #!/bin/sh
-# Cross-compile uz801d for the targets used by UZ801 / OpenStick.
+# Cross-compile uz801d for the targets used by MSM8916 / OpenStick.
 set -eu
 
 cd "$(dirname "$0")"

@@ -1,17 +1,18 @@
-# UZ801 Manager（uz801d）
+# MSM8916 Manager（uz801d）
 
-> 把 UZ801 / OpenStick 随身 Wi-Fi 变成一台可以本地管理的 4G 路由器。
+> 把高通 8916（MSM8916）方案的 OpenStick 随身 Wi-Fi，变成一台可以本地管理的 4G 路由器。
 
-UZ801 Manager 是一个运行在 **OpenStick Debian** 上的轻量级 Web 管理后台，用来替代 UZ801
-随身 Wi-Fi 的官方网页界面。它直接调用设备上的 NetworkManager、ModemManager、hostapd、
-dnsmasq、iw、nftables 和 systemd，提供蜂窝网络、APN、短信、Wi-Fi 热点、客户端管理、
-局域网、流量统计和系统运维等一整套功能。
+MSM8916 Manager 是一个运行在 **OpenStick Debian** 上的轻量级 Web 管理后台，面向所有使用
+**高通 8916（MSM8916 / MSM8936 同族）** 芯片的 4G 随身 Wi-Fi，用来替代各家厂商自带的
+网页界面。它直接调用设备上的 NetworkManager、ModemManager、hostapd、dnsmasq、iw、
+nftables 和 systemd，提供蜂窝网络、APN、短信、Wi-Fi 热点、客户端管理、局域网、流量统计
+和系统运维等一整套功能。
 
 - **本地优先**：不依赖厂商云服务，管理页面、配置和流量记录都在设备本地
 - **单文件部署**：Go 静态二进制，前端全部内嵌，不需要 Node.js、数据库或额外 Web 服务
-- **低资源占用**：适合 512 MB 内存级别的 OpenStick
+- **低资源占用**：适合 512 MB 内存级别的高通 8916 设备
 - **移动端优先**：默认中文界面，支持中/英切换，手机浏览器可直接操作
-- **额外能力**：RaspAP 风格的 Wi-Fi 桥接（AP-STA 中继），未插卡时也能当无线路由器使用
+- **额外能力**：WiFi 转 USB 共享，未插卡时也能把上游无线网络通过 USB 口共享给其他设备
 
 > 本项目只提供管理程序，**不是刷机固件**。使用前设备需要已经刷好 OpenStick Debian，
 > 并且可以通过 SSH 登录。
@@ -55,7 +56,7 @@ dnsmasq、iw、nftables 和 systemd，提供蜂窝网络、APN、短信、Wi-Fi 
 | --- | --- |
 | 已经刷好 OpenStick Debian 的 UZ801 用户 | 仍在使用官方 Android/厂商固件的设备 |
 | 希望数据留在本地、不要云账号的人 | 需要厂商云管理、远程定位等官方服务的人 |
-| 需要短信、APN、热点、桥接等完整功能的用户 | 期待开箱即用的成品固件、不想接触 Linux 的用户 |
+| 需要短信、APN、热点、WiFi 共享等完整功能的用户 | 期待开箱即用的成品固件、不想接触 Linux 的用户 |
 | 愿意通过 SSH 安装和排查问题的用户 | 要求 5 GHz 热点或双频并发的场景（UZ801 硬件不支持） |
 
 ---
@@ -65,15 +66,15 @@ dnsmasq、iw、nftables 和 systemd，提供蜂窝网络、APN、短信、Wi-Fi 
 | 模块 | 说明 |
 | --- | --- |
 | 登录鉴权 | pbkdf2-sha256 密码散列、会话 Cookie、CSRF 校验、登录限流、安全响应头 |
-| 状态总览 | 蜂窝、SIM、热点、桥接、系统资源、流量、接口一览（并发采集） |
+| 状态总览 | 蜂窝、SIM、热点、WiFi 共享、系统资源、流量、接口一览（并发采集） |
 | 蜂窝网络 | 流量开关、飞行模式（关闭蜂窝射频但保留 Wi-Fi）、APN 增删改与保存即连接、网络模式、运营商扫描与注册、USSD、PIN/PUK 解锁、模块重置 |
 | 短信 | 列表/详情/发送/删除、全部已读、未读计数、新短信转发到 Bark / 钉钉 / 飞书 |
 | 热点 | SSID、密码、加密方式、信道（仅 2.4 GHz）、隐藏网络、最大客户端、国家代码；支持 nmcli 或 hostapd 后端 |
-| Wi-Fi 桥接 | 未启用蜂窝数据时连接上游 Wi-Fi，同时继续发射本机热点，下游设备经 NAT 共享上游网络 |
+| WiFi 共享（无线转 USB） | 未启用蜂窝数据时连接上游 Wi-Fi，通过 USB 口给其他设备提供网络；不需要 AP+STA 并发 |
 | 客户端 | 在线/离线、信号、收发流量、备注、拉黑（nftables MAC 过滤）、清除离线记录 |
 | 局域网 | 路由器 IP、子网掩码、DHCP 范围、DNS、租期 |
 | 流量 | 按账期（月）统计，保留最近 36 个月历史，当前账期按日细分，实时速率、配额与超限断网 |
-| 系统 | 设备信息、系统日志、可配置路径的 FRPC 日志、LED 控制、Ping/DNS 诊断、改密、会话时长、重启/关机/恢复出厂 |
+| 系统 | 设备信息、系统日志、可配置路径的 FRPC 日志、LED 控制（完全关闭或夜间定时熄灭）、Ping/DNS 诊断、改密、会话时长、重启/关机/恢复出厂 |
 
 ---
 
@@ -83,7 +84,7 @@ dnsmasq、iw、nftables 和 systemd，提供蜂窝网络、APN、短信、Wi-Fi 
 
 需要满足：
 
-- UZ801 / OpenStick，已刷好 **OpenStick Debian**
+- 高通 8916（MSM8916）设备，已刷好 **OpenStick Debian**
 - 可以通过 SSH 以 root 登录
 - 设备可以访问互联网（安装依赖时需要）
 
@@ -185,7 +186,7 @@ sudo apt-get install -y network-manager modemmanager hostapd dnsmasq iw nftables
 4. 安装 `uz801d.service`、`uz801d-ap.service`、`uz801d-dhcp.service`；
 5. 设置 `uz801d.service` 开机自启并启动。
 
-`uz801d-ap.service` 和 `uz801d-dhcp.service` 只在桥接或 hostapd 热点需要时由主程序拉起，
+`uz801d-ap.service` 和 `uz801d-dhcp.service` 只在旧的 AP-STA 中继或 hostapd 热点需要时由主程序拉起，
 **不要手动设置开机自启**。
 
 ### 默认路径与端口
@@ -249,7 +250,7 @@ uz801d -config /etc/uz801d/config.json -reset-password   # 生成新的随机密
 
 ### 状态总览
 
-首页汇总蜂窝注册状态、SIM、热点、桥接、系统资源、流量和网络接口。数据并发采集，
+首页汇总蜂窝注册状态、SIM、热点、WiFi 共享、系统资源、流量和网络接口。数据并发采集，
 适合快速判断设备当前是否正常。
 
 ### 蜂窝网络与 APN
@@ -269,6 +270,47 @@ uz801d -config /etc/uz801d/config.json -reset-password   # 生成新的随机密
   - 系统里 `nmcli`、`rfkill`、`mmcli` 全都不存在，或存在的工具全部执行失败时，操作会返回
     错误并保持飞行模式关闭，不会假装成功。
 
+#### 4G 永远拨不上号？先看基带固件
+
+有些 OpenStick 镜像自带的是 **M8936** 的 MPSS 固件，装到 M8916 的 UFI 板子上会这样：
+
+| 现象 | 说明 |
+|---|---|
+| `mmcli -m any` 显示 `failed / sim-missing` 或 `disabled` | SIM 明明插着 |
+| `AT+CPIN?` = `READY`，能读到 IMSI/ICCID | UIM 正常，只是射频起不来 |
+| `qmicli -d /dev/wwan0qmi0 --dms-get-operating-mode` → `offline` | |
+| `--dms-set-operating-mode=online` → `QMI error 52 DeviceNotReady` | |
+| `AT+CFUN=1` → `Phone failure`，`AT+CSQ` → `99,99` | |
+
+正确的固件版本是 `MPSS.DPM.1.0.c7-00193-M8916EAAAANVZM-1`。
+安装脚本会自动检查 `/lib/firmware/modem.mdt` 的 sha256，不匹配就备份旧固件到
+`/root/fw-backup-*` 并换成 `firmware/modem-m8916/` 里的正确版本，然后提示重启：
+
+```sh
+# 先把固件放到仓库根目录的 firmware/modem-m8916/（约 40 MB，不入库，见下）
+sudo sh install.sh ./dist/uz801d-linux-arm64 --fix-firmware
+```
+
+固件**不在仓库里**（40+ MB，已在 `.gitignore` 中忽略），自己取一份即可：
+
+```sh
+# 方式 A：从原厂 modem 分区解（它是 FAT16，里面是 image/ 下的 modem.* / mba.mbn / wcnss.*）
+7z x modem.bin -o firmware-stock "image/modem.*" "image/mba.mbn" "image/wcnss.*"
+mkdir -p firmware/modem-m8916
+cp firmware-stock/image/modem.* firmware-stock/image/mba.mbn firmware-stock/image/wcnss.* firmware/modem-m8916/
+
+# 方式 B：从已有的刷机包/备份里拷
+cp /path/to/openstick-flash-kit/firmware/modem-m8916/* firmware/modem-m8916/
+```
+
+校验是否放对（三套必须同源）：
+
+```sh
+sha256sum firmware/modem-m8916/modem.mdt   # 568515ab…6524
+sha256sum firmware/modem-m8916/mba.mbn     # 5d635f58…bc70
+sha256sum firmware/modem-m8916/wcnss.mdt   # 2bc71936…846c
+```
+
 ### 短信
 
 支持短信列表、详情、发送、删除、全部已读和未读计数。短信依赖 ModemManager；
@@ -279,6 +321,9 @@ mmcli -L
 ```
 
 部分模块需要先解锁 PIN 才能收发短信。
+
+页面布局：**发送短信 → 短信列表 → 短信转发**。即使没插 SIM 卡 / ModemManager 不可用，
+发送框、列表和转发设置也都会照常显示，只在顶部加一条提示。
 
 ### 短信转发
 
@@ -300,6 +345,10 @@ mmcli -L
 - 只转发接收方向（`received`）的短信；发送记录不会转发；
 - 每条短信会发往所有「已启用」的渠道，单个渠道失败只记录日志，不影响其他渠道；
 - 「测试」按钮会用表单里当前填写的内容发送一条示例消息（无需先保存），便于先验证 Webhook；
+- 三个渠道都是 HTTPS 请求，依赖系统 CA 证书。精简 rootfs 里常常没有
+  `/etc/ssl/certs/ca-certificates.crt`，这时「测试」会报
+  `x509: certificate signed by unknown authority`。装 `ca-certificates` 后**重启 uz801d**
+  （Go 会缓存证书池）即可；`install.sh --install-deps` 已经包含这个包。
 - Webhook、设备 Key 和签名密钥以明文保存在 `/etc/uz801d/config.json`（0600），备份和导出配置时请注意。
 
 ### Wi-Fi 热点
@@ -311,36 +360,39 @@ mmcli -L
 - **停止热点**会先关闭 NetworkManager 热点连接并禁用其自动重连，再停止 hostapd/dnsmasq
   和桥接单元。只有确认 AP 真正停止后才提示成功，仍在运行时会返回具体错误。
 
-### Wi-Fi 桥接（AP-STA 中继）
+### WiFi 共享（无线转 USB）
 
-适用场景：**没有启用蜂窝数据时**（不插卡，或插卡但未拨号），设备连接一个上游 Wi-Fi
-（例如家里的路由器），同时继续发射自己的热点。下游设备连接 UZ801 的热点后，通过 NAT
-共享上游网络；配合 frp 还可以远程访问下游设备。
+适用场景：**没有启用蜂窝数据时**，设备连接一个上游 WiFi（例如家里的路由器），通过 USB
+口给电脑、路由器等下游设备提供网络。`wlan0` 只作为 STA，**不需要 AP+STA 并发**，适合
+高通 8916 这类单无线接口设备。
 
-实现方式与 RaspAP 的 AP-STA 中继一致：
+实现方式：
 
-1. `wlan0` 作为 STA 通过 NetworkManager 连接上游 Wi-Fi，获取 IP 与默认路由；
-2. 在同一物理网卡上创建虚拟 AP 接口 `uap0`
-   （`iw dev wlan0 interface add uap0 type __ap`），或使用检测到的独立无线网卡；
-3. hostapd 在 AP 接口上起热点；单网卡时必须与上游同信道，程序会自动跟随；
-4. dnsmasq 在 AP 接口上提供 DHCP；
-5. nftables 的 `inet uz801d_bridge` 表做转发放行与 `masquerade`。
+1. `wlan0` 通过 NetworkManager 连接上游 WiFi，获取 IP 与默认路由；
+2. `usb0` 保持 `192.168.68.1/16`，系统 dnsmasq 继续提供 DHCP/DNS；
+3. 开启 IPv4 转发；
+4. nftables 的 `inet uz801d_bridge` 表对 `usb0 <-> wlan0` 做转发放行和 `masquerade`。
 
-桥接页面支持：
+页面支持：
 
-- 上游 SSID、密码、加密方式、附近 Wi-Fi 扫描
-- AP 网卡选择（自动 / `uap0` / 外接网卡）
-- AP 信道（`0` 跟随上游）与路由优先级（metric）
-- 未启用蜂窝数据时自动启用桥接
-- **流量优先**：一旦开启蜂窝流量，桥接立即停用；数据开启期间也不能手动启用桥接
-- **上游断线保持运行**：桥接运行中上游 Wi-Fi 失去地址时不会自动停用，而是保持热点并持续尝试重连
-- **强制启用**：驱动未在 `iw list` 中声明 managed+AP 并发时仍可尝试
+- 上游 SSID、密码、加密方式、附近 WiFi 扫描
+- 下游接口（默认 `usb0`）与上游路由优先级（metric）
+- **网页认证检测**：探测上游是否被 captive portal 拦截，并给出认证页面地址；
+  在连接本设备的电脑浏览器里打开该地址完成登录即可
+- 未启用蜂窝数据时自动启用共享
+- **流量优先**：一旦开启蜂窝流量，共享立即停用并恢复本机热点；数据开启期间不能手动启用共享
+- **上游断线保持运行**：上游 WiFi 失去地址时不会自动停用，而是持续尝试重连
 - 启动失败自动回滚并恢复原热点，避免设备失联
-- 运行时 watchdog：AP 进程退出自动重启，上游掉线自动重连
-- 自动启用失败后 5 分钟内不再自动重试；手动点击“启用桥接”会立即重试
-- 重启后自动恢复上次已启用的桥接（若蜂窝数据已启用则跳过）
+- 重启后自动恢复上次已启用的共享（若蜂窝数据已启用则跳过）
 
-> **插拔 SIM 卡本身不会影响桥接状态**；只有蜂窝数据真正开启时才会停用桥接。这是固定行为。
+> 启用 WiFi 共享会关闭本机热点，`wlan0` 改为客户端模式。此时管理地址为
+> `http://192.168.68.1`（USB）；停用共享后会恢复热点。
+>
+> **热点和 WiFi 共享互斥**：在热点页点击“启用热点”会先退出 WiFi 共享；
+> 在共享页点击“启用共享”会先关闭热点。两边页面都只显示当前可用的那个操作。
+>
+> 本机 wcn36xx 无线驱动不支持 AP+STA 并发，因此不再创建 `uap0`。如果需要“上游 WiFi +
+> 本机热点”同时工作，请使用外接 USB 无线网卡，或插 SIM 卡走 4G + 热点方案。
 
 ### 客户端管理
 
@@ -375,7 +427,11 @@ mmcli -L
   `system.frpc_log_path`，重启后保留。
 - **Ping / DNS 诊断**：网络页的 Ping 默认目标是 `www.baidu.com`，进入网络页会自动执行一次；
   也可以改成其他地址。DNS 解析使用系统解析器。
-- LED 控制、修改密码、会话时长、重启/关机/恢复出厂。
+- **LED 控制**：可以一键完全关闭所有指示灯，也可以设置夜间自动熄灭时间段
+  （例如 22:00–07:00，支持跨午夜，使用设备本地时区）。eMMC 活动灯可以通过
+  `install.sh --emmc-led-off` 启用独立的安全开机服务；该服务带有重启保护，
+  如果上一次尝试未完成会自动禁用，避免重启循环。
+- 修改密码、会话时长、重启/关机/恢复出厂。
 
 > 恢复出厂设置默认**保留管理密码**，避免设备变成无凭证状态。
 
@@ -390,13 +446,14 @@ mmcli -L
    页面不会提供 5 GHz 选项。旧配置里的 5 GHz 频段和 5G 信道会自动改回 2.4 GHz / 自动。
 
 3. **单网卡 AP+STA 取决于无线驱动**
-   UZ801 常见的 WCN3620/WCN36xx 是否能同时做 STA 和 AP 并不确定。页面会显示 `iw list`
-   的能力检测结果。若驱动不支持：
-   - 优先使用外接 USB 无线网卡（程序会自动优先把它作为 AP）；
-   - 或勾选“强制启用”后自行验证（失败会自动恢复原热点）。
+   高通 8916 常见的 WCN3620/WCN36xx 在本项目使用的内核/固件下只能有一个活动接口，
+   无法同时做 STA 和 AP，创建 `uap0` 后 `ip link set up` 会返回 `Device or resource busy`。
+   因此 WiFi 共享改为 **无线转 USB**：`wlan0` 只做 STA，`usb0` 作为下游 LAN。
+   如果确实需要“上游 WiFi + 本机热点”同时工作，请使用外接 USB 无线网卡，或插 SIM 卡
+   走 4G + 热点方案。
 
-4. **桥接与蜂窝数据互斥**
-   蜂窝数据开启时不能使用桥接；SIM 卡插入/拔出本身不会改变桥接状态。
+4. **WiFi 共享与蜂窝数据互斥**
+   蜂窝数据开启时不能使用 WiFi 转 USB 共享；SIM 卡插入/拔出本身不会改变共享状态。
 
 5. **默认端口 80，未启用 TLS**
    后台只适合在局域网使用。需要公网访问时，请通过 frp、VPN 或带 TLS 的反向代理，
@@ -407,15 +464,15 @@ mmcli -L
    获取二进制，并在升级前备份配置。
 
 7. **不要把辅助服务设为开机自启**
-   `uz801d-ap.service` 和 `uz801d-dhcp.service` 由主程序按需拉起，手动 enable 可能与
-   普通热点/桥接冲突。
+   `uz801d-ap.service` 和 `uz801d-dhcp.service` 只用于旧的 AP-STA 中继，WiFi 转 USB
+   共享不需要它们。手动 enable 可能与普通热点冲突。
 
 8. **修改网络配置可能导致失联**
-   修改局域网 IP、启用桥接或强制 AP+STA 时，管理页面可能短暂断开。请提前准备 SSH、
-   USB 网络或串口作为恢复通道。
+   修改局域网 IP 或启用 WiFi 共享时，管理页面可能短暂断开。请提前准备 SSH、USB 网络
+   或串口作为恢复通道。
 
 9. **Windows 版仅用于预览**
-   Windows 构建可以查看界面、调用部分 API，但蜂窝、热点、桥接等依赖 Linux 组件，
+   Windows 构建可以查看界面、调用部分 API，但蜂窝、热点、WiFi 共享等依赖 Linux 组件，
    无法真正工作。DNS 诊断依赖 `getent`，Windows 上不可用。
 
 10. **旧二进制不会自动迁移端口**
@@ -454,14 +511,13 @@ mmcli -L
     "band": "bg",                   // UZ801 仅支持 2.4 GHz
     "channel": 6,
     "bridge": {
+      "mode": "usb",                  // usb | ap_sta
+      "downstream_interface": "usb0",
       "auto": true,
-      "force": false,
-      "ap_interface": "auto",
       "upstream_ssid": "",
       "upstream_password": "",
       "upstream_security": "wpa2",
-      "route_metric": 50,
-      "channel": 0
+      "route_metric": 50
     }
   },
   "lan": {
@@ -585,25 +641,27 @@ journalctl -u NetworkManager -u uz801d -f
 最后逐项验证。如果仍然失败，页面会显示具体是哪一项还在运行（例如
 `hostapd.service 仍在运行`），根据提示处理即可。
 
-**桥接提示驱动不支持？**
+**WiFi 共享提示驱动不支持？**
 
-单网卡 AP+STA 需要驱动声明并发能力。先查看：
+旧版 AP-STA 中继需要驱动声明 managed + AP 并发。高通 8916 的 wcn36xx 在本项目使用的
+内核/固件下只能有一个活动接口，创建 `uap0` 后会返回 `Device or resource busy`。当前版本
+已改为 **WiFi 转 USB 共享**，不再需要 AP+STA。如果页面仍显示旧版“AP 网卡/信道/强制启用”
+字段，说明设备上还是旧二进制，请重新部署并强制刷新浏览器。
 
-```sh
-iw list
+**启用 WiFi 共享后管理页面打不开？**
+
+启用共享会关闭本机热点，`wlan0` 改为 STA。此时请通过 USB 地址访问：
+
+```text
+http://192.168.68.1
 ```
 
-确认 interface combinations 是否包含 managed + AP。若没有，优先使用外接 USB 无线网卡，
-或勾选“强制启用”并自行验证（失败会自动回滚）。
-
-**桥接后管理页面打不开？**
-
-桥接会短暂重建热点。若上游连接失败，程序会自动恢复原热点。若设备彻底失联，可通过
-USB 网络或串口登录，停止桥接：
+若上游连接失败，程序会自动恢复原热点。若设备彻底失联，可通过 USB 网络或串口登录，
+停止共享：
 
 ```sh
 systemctl stop uz801d
-# 编辑 /etc/uz801d/config.json，把 wifi.bridge.auto 改为 false
+# 编辑 /etc/uz801d/config.json，把 wifi.bridge.enabled 改为 false
 systemctl start uz801d
 ```
 
@@ -706,11 +764,11 @@ Windows 下预览界面与 API：
 | POST | `/api/modem/modes`、`/api/modem/scan`、`/api/modem/register`、`/api/modem/ussd`、`/api/modem/pin`、`/api/modem/reset`、`/api/modem/flight` | 模块操作与飞行模式 |
 | GET/POST/DELETE | `/api/sms`、`/api/sms/{id}`、`/api/sms/send`、`/api/sms/read` | 短信（`DELETE /api/sms` 删除全部）；转发配置见 `GET/POST /api/sms/forward`、`POST /api/sms/forward/test` |
 | GET/POST | `/api/wifi`、`/api/wifi/scan`、`/api/wifi/restart`、`/api/wifi/stop` | 热点 |
-| GET/POST | `/api/bridge`、`/api/bridge/enable`、`/api/bridge/disable`、`/api/bridge/scan` | Wi-Fi 桥接 |
+| GET/POST | `/api/bridge`、`/api/bridge/enable`、`/api/bridge/disable`、`/api/bridge/scan`、`/api/bridge/portal` | WiFi 转 USB 共享；`portal` 检测网页认证页面 |
 | GET/POST | `/api/clients`、`/api/clients/block`、`/api/clients/unblock`、`/api/clients/rename`、`/api/clients/forget` | 客户端 |
 | GET/POST | `/api/lan` | 局域网 / DHCP |
 | GET/POST | `/api/traffic`、`/api/traffic/reset`、`/api/traffic/lifetime` | 流量 |
-| GET/POST | `/api/system`、`/api/system/logs`、`/api/system/frpc-log`、`/api/system/leds`、`/api/system/led`、`/api/system/password`、`/api/system/language`、`/api/system/admin-user`、`/api/system/session-hours`、`/api/system/reboot`、`/api/system/poweroff`、`/api/system/factory-reset`、`/api/system/ping`、`/api/system/dns` | 系统 |
+| GET/POST | `/api/system`、`/api/system/logs`、`/api/system/frpc-log`、`/api/system/leds`、`/api/system/led`、`/api/system/led-control`、`/api/system/password`、`/api/system/language`、`/api/system/admin-user`、`/api/system/session-hours`、`/api/system/reboot`、`/api/system/poweroff`、`/api/system/factory-reset`、`/api/system/ping`、`/api/system/dns` | 系统 |
 | GET | `/api/config` | 导出配置（不含密码散列） |
 
 ---
@@ -737,7 +795,7 @@ deploy               systemd 单元与安装/卸载脚本
 
 提交 Issue 时建议附上：
 
-- UZ801 / OpenStick 的具体型号和系统版本（`uname -a`、`cat /etc/os-release`）
+- 设备的具体型号和系统版本（`uname -a`、`cat /etc/os-release`）
 - 相关日志：
 
   ```sh

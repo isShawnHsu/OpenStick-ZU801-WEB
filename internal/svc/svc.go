@@ -76,12 +76,18 @@ type Manager struct {
 	smsForwardLastErr string
 	smsForwardErrAt   time.Time
 
+	// ledMu guards the last applied LED power state.
+	ledMu      sync.Mutex
+	ledApplied bool
+	ledOff     bool
+
 	stopOnce sync.Once
 	stopCh   chan struct{}
 }
 
 type bridgeRuntime struct {
 	Active            bool      `json:"active"`
+	Mode              string    `json:"mode"`
 	APInterface       string    `json:"ap_interface"`
 	UpstreamIface     string    `json:"upstream_interface"`
 	UpstreamSSID      string    `json:"upstream_ssid"`
@@ -93,15 +99,18 @@ type bridgeRuntime struct {
 }
 
 type trafficRuntime struct {
-	lastRX   int64
-	lastTX   int64
-	lastAt   time.Time
-	rxRate   float64
-	txRate   float64
-	rxTotal  int64
-	txTotal  int64
-	period   string
-	sampled  bool
+	lastRX  int64
+	lastTX  int64
+	lastAt  time.Time
+	rxRate  float64
+	txRate  float64
+	rxTotal int64
+	txTotal int64
+	period  string
+	sampled bool
+	// src records where lastRX/lastTX came from ("modem" or "net"); deltas are
+	// only meaningful while the source stays the same.
+	src      string
 	lastSave time.Time
 }
 
@@ -260,6 +269,7 @@ func (m *Manager) Start(ctx context.Context) {
 	go m.smsForwardLoop(ctx)
 	go m.resumeBridge(ctx)
 	go m.applyFlightModeOnStart(ctx)
+	go m.ledLoop(ctx)
 }
 
 // Stop terminates background workers and flushes state.

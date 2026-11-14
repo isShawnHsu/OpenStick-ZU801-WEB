@@ -1,4 +1,4 @@
-/* UZ801 Manager - application shell, actions and bootstrap */
+/* MSM8916 Manager - application shell, actions and bootstrap */
 var PAGES = ['dashboard', 'network', 'cellular', 'sms', 'wifi', 'bridge', 'clients', 'lan', 'traffic', 'system'];
 // The network page pings Baidu automatically so the user has a working target
 // without typing anything. A custom target is kept until the page is reloaded.
@@ -158,7 +158,7 @@ function shell(page) {
   }).join('');
   var ver = state.session && state.session.version ? state.session.version : '';
   return '<header class="topbar">' +
-    '<div class="brand"><span class="dot ok"></span><span>UZ801 Manager</span>' + (ver ? '<small class="ver">v' + esc(ver) + '</small>' : '') + '</div>' +
+    '<div class="brand"><span class="dot ok"></span><span>MSM8916 Manager</span>' + (ver ? '<small class="ver">v' + esc(ver) + '</small>' : '') + '</div>' +
     '<span id="top-status" class="top-status">' + esc(topStatusText()) + '</span>' +
     '<div class="top-actions">' +
     '<button class="ghost small" data-action="toggle-lang" type="button">' + (state.lang === 'zh' ? 'EN' : '中') + '</button>' +
@@ -166,7 +166,7 @@ function shell(page) {
     '</div></header>' +
     '<nav class="tabs">' + links + '</nav>' +
     '<main id="main"><div class="loading">' + esc(t('common.loading')) + '</div></main>' +
-    '<footer class="foot">UZ801 Manager · OpenStick Debian · ' + esc(ver || '') + '</footer>' +
+    '<footer class="foot">MSM8916 Manager · OpenStick Debian · ' + esc(ver || '') + '</footer>' +
     '<div id="toast"></div><div id="modal"></div>';
 }
 
@@ -272,10 +272,11 @@ async function loadPage(page, silent) {
     } else if (page === 'traffic') {
       html = trafficView(await api('/api/traffic'));
     } else if (page === 'system') {
-      var results = await Promise.all([api('/api/system'), api('/api/system/leds')]);
+      var results = await Promise.all([api('/api/system'), api('/api/system/leds'), api('/api/system/led-control')]);
       state.cache.system = results[0];
       state.cache.leds = results[1] || [];
-      html = systemView(results[0], results[1]);
+      state.cache.ledControl = results[2] || {};
+      html = systemView(results[0], results[1], results[2]);
     } else {
       html = '<div class="note bad">' + esc(t('error.noData')) + '</div>';
     }
@@ -481,12 +482,24 @@ async function handleAction(el) {
       });
       return;
     case 'wifi-stop':
-      await act(el, async function () {
-        if (!confirmBox(t('wifi.stop') + '?')) return;
+      if (el.disabled) return;
+      el.disabled = true;
+      el.classList.add('busy');
+      try {
         await api('/api/wifi/stop', { method: 'POST', body: {} });
         toast(t('wifi.stopped'));
-        await refresh();
-      });
+        // Keep the button greyed briefly, then reload every status field.
+        // A short delay avoids reading a stale NetworkManager state right at
+        // the moment the AP connection goes down.
+        el.classList.remove('busy');
+        setTimeout(function () { refresh(true).catch(function () {}); }, 1500);
+      } catch (e) {
+        if (e.status !== 401) toast(e.message || t('common.error'), 'bad');
+        if (el.isConnected) {
+          el.disabled = false;
+          el.classList.remove('busy');
+        }
+      }
       return;
     case 'wifi-scan':
       await act(el, async function () {
@@ -504,12 +517,16 @@ async function handleAction(el) {
         var active = state.last && state.last.bridge && state.last.bridge.active;
         if (active) {
           await api('/api/bridge/disable', { method: 'POST', body: {} });
+          state.cache.portal = null;
+          toast(t('bridge.stopping'));
+          setTimeout(function () { refresh(true).catch(function () {}); }, 4000);
         } else {
           toast(t('common.working'));
           await api('/api/bridge/enable', { method: 'POST', body: {} });
+          toast(t('common.saved'));
+          state.cache.portal = null;
+          await refresh();
         }
-        toast(t('common.saved'));
-        await refresh();
       });
       return;
     case 'bridge-enable':
@@ -518,13 +535,37 @@ async function handleAction(el) {
         toast(t('common.working'));
         await api('/api/bridge/enable', { method: 'POST', body: {} });
         toast(t('common.saved'));
+        state.cache.portal = null;
         await refresh();
       });
       return;
     case 'bridge-disable':
-      await act(el, async function () {
-        if (!confirmBox(t('bridge.disable') + '?')) return;
+      if (el.disabled) return;
+      el.disabled = true;
+      el.classList.add('busy');
+      try {
         await api('/api/bridge/disable', { method: 'POST', body: {} });
+        state.cache.portal = null;
+        toast(t('bridge.stopping'));
+        // Keep the button greyed until the page reloads after the async stop.
+        el.classList.remove('busy');
+        setTimeout(function () { refresh(true).catch(function () {}); }, 4000);
+      } catch (e) {
+        if (e.status !== 401) toast(e.message || t('common.error'), 'bad');
+        if (el.isConnected) {
+          el.disabled = false;
+          el.classList.remove('busy');
+        }
+      }
+      return;
+    case 'bridge-portal':
+      await act(el, async function () {
+        toast(t('common.working'));
+        var res = await api('/api/bridge/portal');
+        state.cache.portal = res || {};
+        if (res && res.online) toast(t('bridge.portalOnline'));
+        else if (res && res.portal_url) toast(t('bridge.portalDetected'));
+        else toast((res && res.error) || t('bridge.portalError'), 'bad');
         await refresh();
       });
       return;
@@ -765,19 +806,20 @@ async function saveBridgeForm() {
   if (!form) return;
   var d = formObject(form);
   var c = state.cache.bridgeConfig || {};
-  var forceEl = document.querySelector('input[name="force"]');
   var payload = {
+    mode: 'usb',
+    downstream_interface: d.downstream_interface || 'usb0',
     upstream_ssid: d.upstream_ssid,
     upstream_password: d.upstream_password,
     upstream_security: d.upstream_security,
     upstream_hidden: !!c.upstream_hidden,
     upstream_connection: c.upstream_connection || 'uz801d-upstream',
     previous_ap_connection: c.previous_ap_connection || '',
-    ap_interface: d.ap_interface,
-    channel: parseInt(d.channel, 10) || 0,
+    ap_interface: c.ap_interface || 'auto',
+    channel: c.channel || 0,
     route_metric: parseInt(d.route_metric, 10) || 50,
     'auto': !!d.auto,
-    force: forceEl ? forceEl.checked : !!c.force,
+    force: !!c.force,
     enabled: !!c.enabled
   };
   await api('/api/bridge', { method: 'POST', body: payload });
@@ -1042,6 +1084,19 @@ async function handleSubmit(ev) {
       await act(btn, async function () {
         await api('/api/system/led', { method: 'POST', body: { name: d.name, trigger: d.trigger, brightness: parseInt(d.brightness, 10) } });
         closeModal();
+        toast(t('common.saved'));
+        await refresh();
+      });
+      return;
+    }
+    if (kind === 'led-control') {
+      await act(btn, async function () {
+        await api('/api/system/led-control', { method: 'POST', body: {
+          off: !!d.off,
+          schedule_enabled: !!d.schedule_enabled,
+          off_time: d.off_time || '22:00',
+          on_time: d.on_time || '07:00'
+        } });
         toast(t('common.saved'));
         await refresh();
       });

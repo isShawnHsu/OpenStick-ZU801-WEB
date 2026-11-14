@@ -1,5 +1,5 @@
 [Unit]
-Description=UZ801 Manager (uz801d)
+Description=MSM8916 Manager (uz801d)
 Documentation=https://github.com/
 After=network-online.target NetworkManager.service
 Wants=network-online.target

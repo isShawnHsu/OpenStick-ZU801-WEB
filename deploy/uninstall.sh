@@ -1,5 +1,5 @@
 #!/bin/sh
-# Uninstall UZ801 Manager. Use --purge to also delete configuration and state.
+# Uninstall MSM8916 Manager. Use --purge to also delete configuration and state.
 set -eu
 
 PURGE=0

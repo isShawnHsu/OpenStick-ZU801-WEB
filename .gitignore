@@ -5,3 +5,7 @@ dist/
 .idea/
 .vscode/
 .DS_Store
+
+# 基带固件（约 40 MB，单独分发，不入库）
+# install.sh --fix-firmware 会从 firmware/modem-m8916/ 读取
+firmware/

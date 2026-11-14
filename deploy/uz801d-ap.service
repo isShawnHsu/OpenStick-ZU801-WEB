@@ -1,5 +1,5 @@
 [Unit]
-Description=UZ801d bridge hostapd (AP-STA relay)
+Description=MSM8916 bridge hostapd (AP-STA relay)
 After=network.target
 Before=uz801d-dhcp.service
 # Started on demand by uz801d; do not enable at boot.

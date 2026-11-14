@@ -3,7 +3,7 @@ package buildinfo
 
 const (
 	// Name is the human readable product name.
-	Name = "UZ801 Manager"
+	Name = "MSM8916 Manager"
 	// Slug is used for file names and service descriptions.
 	Slug = "uz801d"
 )

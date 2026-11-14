@@ -46,6 +46,7 @@ func (m *Manager) Clients(ctx context.Context) []Client {
 		stations = parse.ParseStations(out)
 	}
 	leases := m.readLeases()
+	neighbors := m.readNeighbors(ctx)
 	now := time.Now().Unix()
 	snap := m.store.Snapshot()
 	blocked := map[string]bool{}
@@ -84,7 +85,19 @@ func (m *Manager) Clients(ctx context.Context) []Client {
 		c.ConnectedSeconds = st.ConnectedSeconds
 	}
 	for _, l := range leases {
-		c := add(l.MAC)
+		lmac, err := netutil.NormalizeMAC(l.MAC)
+		if err != nil {
+			continue
+		}
+		_, stationOnline := stations[lmac]
+		online := stationOnline || neighbors[lmac]
+		// A plain lease without a live station/neighbour is only a memory of
+		// an old device. Do not resurrect it after "clear offline records";
+		// only remembered clients are allowed to appear offline.
+		if _, remembered := snap.Clients[lmac]; !online && !remembered {
+			continue
+		}
+		c := add(lmac)
 		if c == nil {
 			continue
 		}
@@ -94,10 +107,8 @@ func (m *Manager) Clients(ctx context.Context) []Client {
 		if l.Hostname != "" {
 			c.Hostname = l.Hostname
 		}
-		if l.Expiry == 0 || l.Expiry > now {
-			if _, online := stations[l.MAC]; online {
-				c.Online = true
-			}
+		if online {
+			c.Online = true
 		}
 	}
 
@@ -125,6 +136,41 @@ func (m *Manager) Clients(ctx context.Context) []Client {
 		return out[i].MAC < out[j].MAC
 	})
 	return out
+}
+
+// readNeighbors returns MACs that currently have an ARP/neighbour entry.
+// This makes USB-sharing clients visible as online even though there is no
+// wireless station table for usb0.
+func (m *Manager) readNeighbors(ctx context.Context) map[string]bool {
+	out, err := m.Run(ctx, 4*time.Second, "ip", "neigh", "show")
+	if err != nil {
+		return nil
+	}
+	res := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		mac := ""
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "lladdr" {
+				mac = fields[i+1]
+				break
+			}
+		}
+		if mac == "" {
+			continue
+		}
+		state := fields[len(fields)-1]
+		if state == "FAILED" || state == "INCOMPLETE" {
+			continue
+		}
+		if normalized, err := netutil.NormalizeMAC(mac); err == nil {
+			res[normalized] = true
+		}
+	}
+	return res
 }
 
 func (m *Manager) readLeases() []parse.Lease {

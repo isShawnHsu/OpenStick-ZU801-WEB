@@ -1,5 +1,5 @@
 [Unit]
-Description=UZ801d bridge DHCP/DNS (dnsmasq)
+Description=MSM8916 bridge DHCP/DNS (dnsmasq)
 After=uz801d-ap.service
 Requires=uz801d-ap.service
 # Started on demand by uz801d; do not enable at boot.

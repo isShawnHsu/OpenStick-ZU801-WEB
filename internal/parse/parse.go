@@ -33,6 +33,7 @@ type ModemInfo struct {
 	CurrentCaps      []string `json:"current_capabilities"`
 	SupportedModes   []string `json:"supported_modes"`
 	UnlockRequired   string   `json:"unlock_required"`
+	UnlockNote       string   `json:"unlock_note"`
 	UnlockRetries    string   `json:"unlock_retries"`
 	SimPath          string   `json:"sim_path"`
 	OwnNumbers       []string `json:"own_numbers"`
@@ -42,6 +43,17 @@ type ModemInfo struct {
 	PowerState       string   `json:"power_state"`
 	HardwareRevision string   `json:"hardware_revision"`
 	Plugin           string   `json:"plugin"`
+}
+
+// IsNonBlockingUnlock reports whether a ModemManager lock only protects an
+// optional feature. PIN2/PUK2 guard fixed dialing (FDN) and never stop the
+// modem from registering, using data or sending SMS.
+func IsNonBlockingUnlock(lock string) bool {
+	switch strings.ToLower(strings.TrimSpace(lock)) {
+	case "sim-pin2", "sim-puk2":
+		return true
+	}
+	return false
 }
 
 // SignalValues contains extended signal measurements.
@@ -239,6 +251,13 @@ func ParseModem(data []byte) (*ModemInfo, error) {
 	info.IMEI = asString(t["imei"])
 	if info.IMEI == "" {
 		info.IMEI = asString(g["equipment-identifier"])
+	}
+	// PIN2/PUK2 只保护固定拨号（FDN），不影响网络注册、上网和短信。
+	// 但 ModemManager 会把 UIM 的 "PIN2 enabled-not-verified" 报成
+	// unlock-required=sim-pin2，照着显示会让用户以为 SIM 被锁住了。
+	if IsNonBlockingUnlock(info.UnlockRequired) {
+		info.UnlockNote = info.UnlockRequired
+		info.UnlockRequired = ""
 	}
 	// current-modes is a plain string in ModemManager, but be tolerant.
 	switch v := g["current-modes"].(type) {

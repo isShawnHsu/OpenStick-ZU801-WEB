@@ -3,6 +3,9 @@ package svc
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -22,18 +25,21 @@ type BridgeCapability struct {
 
 // BridgeStatus is the AP-STA relay state.
 type BridgeStatus struct {
-	Enabled       bool             `json:"enabled"`
-	Active        bool             `json:"active"`
-	Auto          bool             `json:"auto"`
-	Force         bool             `json:"force"`
-	APInterface   string           `json:"ap_interface"`
-	UpstreamIface string           `json:"upstream_interface"`
-	UpstreamSSID  string           `json:"upstream_ssid"`
-	Channel       int              `json:"channel"`
-	StartedAt     int64            `json:"started_at"`
-	LastError     string           `json:"last_error"`
-	Capability    BridgeCapability `json:"capability"`
-	UpstreamIP    string           `json:"upstream_ip"`
+	Enabled             bool             `json:"enabled"`
+	Active              bool             `json:"active"`
+	Mode                string           `json:"mode"`
+	Auto                bool             `json:"auto"`
+	Force               bool             `json:"force"`
+	APInterface         string           `json:"ap_interface"`
+	DownstreamInterface string           `json:"downstream_interface"`
+	DownstreamIP        string           `json:"downstream_ip"`
+	UpstreamIface       string           `json:"upstream_interface"`
+	UpstreamSSID        string           `json:"upstream_ssid"`
+	Channel             int              `json:"channel"`
+	StartedAt           int64            `json:"started_at"`
+	LastError           string           `json:"last_error"`
+	Capability          BridgeCapability `json:"capability"`
+	UpstreamIP          string           `json:"upstream_ip"`
 }
 
 // BridgeSnapshot returns a copy of the relay runtime state.
@@ -53,17 +59,26 @@ func (m *Manager) BridgeStatus(ctx context.Context) *BridgeStatus {
 	cfg := m.Config()
 	br := m.BridgeSnapshot()
 	st := &BridgeStatus{
-		Enabled:       cfg.Wifi.Bridge.Enabled,
-		Active:        br.Active,
-		Auto:          cfg.Wifi.Bridge.Auto,
-		Force:         cfg.Wifi.Bridge.Force,
-		APInterface:   br.APInterface,
-		UpstreamIface: br.UpstreamIface,
-		UpstreamSSID:  br.UpstreamSSID,
-		Channel:       br.Channel,
-		StartedAt:     br.StartedAt.Unix(),
-		LastError:     br.LastError,
-		Capability:    m.BridgeCapability(ctx),
+		Enabled:             cfg.Wifi.Bridge.Enabled,
+		Active:              br.Active,
+		Mode:                cfg.Wifi.Bridge.Mode,
+		Auto:                cfg.Wifi.Bridge.Auto,
+		Force:               cfg.Wifi.Bridge.Force,
+		APInterface:         br.APInterface,
+		DownstreamInterface: cfg.Wifi.Bridge.DownstreamInterface,
+		UpstreamIface:       br.UpstreamIface,
+		UpstreamSSID:        br.UpstreamSSID,
+		Channel:             br.Channel,
+		StartedAt:           br.StartedAt.Unix(),
+		LastError:           br.LastError,
+		Capability:          m.BridgeCapability(ctx),
+	}
+	if cfg.Wifi.Bridge.Mode == "usb" {
+		st.APInterface = cfg.Wifi.Bridge.DownstreamInterface
+		st.Channel = 0
+		if st.DownstreamInterface != "" {
+			st.DownstreamIP = m.ifaceIPv4(ctx, st.DownstreamInterface)
+		}
 	}
 	if st.UpstreamIface != "" {
 		st.UpstreamIP = m.ifaceIPv4(ctx, st.UpstreamIface)
@@ -80,6 +95,16 @@ func (m *Manager) BridgeStatus(ctx context.Context) *BridgeStatus {
 func (m *Manager) BridgeCapability(ctx context.Context) BridgeCapability {
 	cfg := m.Config()
 	caps := BridgeCapability{}
+	if cfg.Wifi.Bridge.Mode == "" || cfg.Wifi.Bridge.Mode == "usb" {
+		caps.Supported = true
+		caps.Reason = "USB 共享模式：wlan0 连接上游 WiFi，USB 下游接口给其他设备提供网络"
+		for _, name := range []string{cfg.Wifi.Interface, cfg.Wifi.Bridge.DownstreamInterface} {
+			if name != "" {
+				caps.Interfaces = append(caps.Interfaces, name)
+			}
+		}
+		return caps
+	}
 	if !m.Available("iw") {
 		caps.Reason = "未安装 iw，无法检测无线接口组合"
 		return caps
@@ -115,7 +140,9 @@ func (m *Manager) BridgeCapability(ctx context.Context) BridgeCapability {
 	caps.Supported = ok
 	caps.Reason = reason
 	if !ok && len(caps.Combos) == 0 {
-		caps.Reason = "无线驱动未报告接口组合，单网卡 AP-STA 需要强制启用并自行验证"
+		caps.Reason = "无线驱动没有上报 AP+STA 并发能力。MSM8916 的 wcn36xx 实测只支持单 vif：" +
+			"wlan0 作 STA 时再建 uap0 会被降级成 managed，hostapd 起不来。" +
+			"请改用「WiFi 转 USB 共享」（wlan0 作 STA + usb0 作 LAN），或外接一块 USB 无线网卡做 AP。"
 	}
 	return caps
 }
@@ -128,7 +155,12 @@ const bridgeAutoRetryDelay = 5 * time.Minute
 // access point is restored so the device does not disappear from the LAN.
 func (m *Manager) EnableBridge(ctx context.Context) error {
 	m.bridgeMu.Lock()
-	err := m.enableBridgeLocked(ctx)
+	var err error
+	if mode := m.Config().Wifi.Bridge.Mode; mode == "" || mode == "usb" {
+		err = m.enableUSBBridgeLocked(ctx)
+	} else {
+		err = m.enableBridgeLocked(ctx)
+	}
 	cfg := m.Config().Clone()
 	m.bridgeMu.Unlock()
 	if err != nil {
@@ -141,6 +173,104 @@ func (m *Manager) EnableBridge(ctx context.Context) error {
 		}
 	}
 	return err
+}
+
+// enableUSBBridgeLocked shares the upstream WiFi connection with the USB
+// downstream interface. It does not need AP+STA concurrency: wlan0 is a
+// station and usb0 stays the LAN interface.
+func (m *Manager) enableUSBBridgeLocked(ctx context.Context) error {
+	cfg := m.Config()
+	if m.CellularDataActive(ctx) {
+		return fmt.Errorf("蜂窝数据已开启，请先关闭流量再启用 WiFi 转 USB 共享")
+	}
+	if strings.TrimSpace(cfg.Wifi.Bridge.UpstreamSSID) == "" {
+		return fmt.Errorf("请先填写要连接的上游 WiFi 名称")
+	}
+	upstream := cfg.Wifi.Interface
+	downstream := cfg.Wifi.Bridge.DownstreamInterface
+	if downstream == "" {
+		downstream = "usb0"
+	}
+	if upstream == "" || downstream == upstream {
+		return fmt.Errorf("上游无线网卡和下游接口不能相同")
+	}
+	if !m.Available("nmcli") {
+		return fmt.Errorf("WiFi 转 USB 共享需要 NetworkManager（nmcli）")
+	}
+
+	// The downstream USB interface normally already has an address from
+	// NetworkManager. Do not tear down the working hotspot if it is missing.
+	if m.ifaceIPv4(ctx, downstream) == "" {
+		_, _ = m.Run(ctx, 30*time.Second, "nmcli", "device", "connect", downstream)
+	}
+	if m.ifaceIPv4(ctx, downstream) == "" {
+		return fmt.Errorf("下游接口 %s 没有 IPv4 地址", downstream)
+	}
+
+	m.log.Printf("USB 共享: 上游=%s 下游=%s", upstream, downstream)
+
+	// Remember the normal AP connection so it can be restored later.
+	if cfg.Wifi.Bridge.PreviousAPConnection == "" {
+		if prev := m.activeConnectionFor(ctx, upstream); prev != "" {
+			_ = m.Update(func(c *config.Config) error {
+				c.Wifi.Bridge.PreviousAPConnection = prev
+				return nil
+			})
+			cfg = m.Config()
+		}
+	}
+	if m.bridge.Active {
+		m.teardownBridgeLocked(ctx, cfg)
+	}
+	m.stopStandaloneAP(ctx)
+	prev := cfg.Wifi.Bridge.PreviousAPConnection
+	if prev != "" {
+		_, _ = m.Run(ctx, 10*time.Second, "nmcli", "connection", "modify", prev, "connection.autoconnect", "no")
+		_, _ = m.Run(ctx, 20*time.Second, "nmcli", "connection", "down", prev)
+	} else if active := m.activeConnectionFor(ctx, upstream); active != "" {
+		_, _ = m.Run(ctx, 20*time.Second, "nmcli", "connection", "down", active)
+	}
+	_, _ = m.Run(ctx, 8*time.Second, "nmcli", "device", "set", upstream, "managed", "yes")
+
+	if err := m.connectUpstream(ctx, cfg, upstream); err != nil {
+		m.teardownBridgeLocked(ctx, cfg)
+		return err
+	}
+	if ip := m.ifaceIPv4(ctx, upstream); ip == "" {
+		m.teardownBridgeLocked(ctx, cfg)
+		return fmt.Errorf("上游 WiFi 已连接但没有获得 IPv4 地址，请检查上游网络")
+	}
+
+	_, _ = m.Run(ctx, 8*time.Second, "sysctl", "-w", "net.ipv4.ip_forward=1")
+	if err := m.applyAPNAT(ctx, downstream, upstream); err != nil {
+		m.teardownBridgeLocked(ctx, cfg)
+		return fmt.Errorf("配置 USB 共享 NAT 失败: %w", err)
+	}
+
+	// The system dnsmasq instance serves DHCP/DNS on the USB LAN. It is
+	// independent of the AP's dnsmasq and must stay running in this mode.
+	if m.Available("systemctl") && m.unitExists(ctx, "dnsmasq.service") && !m.serviceActive(ctx, "dnsmasq.service") {
+		if err := m.serviceAction(ctx, "start", "dnsmasq.service"); err != nil {
+			m.log.Printf("启动 dnsmasq.service 失败: %v", err)
+		}
+	}
+
+	m.bridge = bridgeRuntime{
+		Active:        true,
+		Mode:          "usb",
+		APInterface:   downstream,
+		UpstreamIface: upstream,
+		UpstreamSSID:  cfg.Wifi.Bridge.UpstreamSSID,
+		StartedAt:     time.Now(),
+	}
+	if err := m.Update(func(c *config.Config) error {
+		c.Wifi.Bridge.Enabled = true
+		return nil
+	}); err != nil {
+		m.log.Printf("保存 USB 共享状态失败: %v", err)
+	}
+	m.log.Printf("USB 共享已启用: %s -> %s", downstream, upstream)
+	return nil
 }
 
 func (m *Manager) enableBridgeLocked(ctx context.Context) error {
@@ -270,6 +400,7 @@ func (m *Manager) enableBridgeLocked(ctx context.Context) error {
 
 	m.bridge = bridgeRuntime{
 		Active:        true,
+		Mode:          "ap_sta",
 		APInterface:   apIface,
 		UpstreamIface: upstream,
 		UpstreamSSID:  cfg.Wifi.Bridge.UpstreamSSID,
@@ -408,6 +539,15 @@ func (m *Manager) prepareAPInterface(ctx context.Context, cfg *config.Config, ap
 	if _, err := m.Run(ctx, 10*time.Second, "iw", "dev", cfg.Wifi.Interface, "interface", "add", apIface, "type", "__ap"); err != nil {
 		return fmt.Errorf("创建虚拟 AP 接口 %s 失败（驱动可能不支持 AP+STA 并发）: %w", apIface, err)
 	}
+	// 有些驱动（MSM8916 的 wcn36xx）会接受请求但静默建成 managed 接口，
+	// 之后 hostapd 只会报一句难懂的 "Could not set interface ... flags (UP):
+	// Device or resource busy"。这里提前抓出来。
+	if info, err := m.Run(ctx, 5*time.Second, "iw", "dev", apIface, "info"); err == nil {
+		if !strings.Contains(info, "type AP") {
+			_, _ = m.Run(ctx, 5*time.Second, "iw", "dev", apIface, "del")
+			return fmt.Errorf("驱动把 %s 建成了非 AP 接口（wcn36xx 单 vif 限制，AP+STA 不可用）；请改用「WiFi 转 USB 共享」模式或外接 USB 无线网卡", apIface)
+		}
+	}
 	if _, err := m.Run(ctx, 8*time.Second, "ip", "link", "set", apIface, "up"); err != nil {
 		return fmt.Errorf("启用 AP 接口失败: %w", err)
 	}
@@ -497,8 +637,19 @@ func (m *Manager) disableBridge(ctx context.Context, restore bool) error {
 // teardownBridgeLocked must be called with bridgeMu held.
 func (m *Manager) teardownBridgeLocked(ctx context.Context, cfg *config.Config) {
 	br := m.bridge
+	usbMode := br.Mode == "usb" || (br.Mode == "" && cfg.Wifi.Bridge.Mode == "usb")
 	m.stopBridgeServices(ctx)
 	m.nftDelete(ctx, nftBridgeTable)
+	if cfg.Wifi.Bridge.UpstreamConnection != "" {
+		_, _ = m.Run(ctx, 10*time.Second, "nmcli", "connection", "modify",
+			cfg.Wifi.Bridge.UpstreamConnection, "connection.autoconnect", "no")
+		_, _ = m.Run(ctx, 20*time.Second, "nmcli", "connection", "down", cfg.Wifi.Bridge.UpstreamConnection)
+	}
+	if usbMode {
+		// usb0 is the LAN side in USB sharing mode; never flush its address.
+		m.bridge = bridgeRuntime{LastError: br.LastError}
+		return
+	}
 	apIface := br.APInterface
 	if apIface == "" {
 		apIface = cfg.Wifi.Bridge.APInterface
@@ -511,16 +662,22 @@ func (m *Manager) teardownBridgeLocked(ctx context.Context, cfg *config.Config) 
 		_, _ = m.Run(ctx, 5*time.Second, "iw", "dev", "uap0", "del")
 		_, _ = m.Run(ctx, 5*time.Second, "ip", "link", "delete", "uap0")
 	}
-	if cfg.Wifi.Bridge.UpstreamConnection != "" {
-		_, _ = m.Run(ctx, 20*time.Second, "nmcli", "connection", "down", cfg.Wifi.Bridge.UpstreamConnection)
-	}
 	m.bridge = bridgeRuntime{LastError: br.LastError}
 }
 
 func (m *Manager) restoreNormalAP(ctx context.Context, cfg *config.Config) error {
 	prev := cfg.Wifi.Bridge.PreviousAPConnection
 	if prev != "" && m.Available("nmcli") {
+		_, _ = m.Run(ctx, 10*time.Second, "nmcli", "connection", "modify", prev, "connection.autoconnect", "yes")
 		if _, err := m.Run(ctx, 45*time.Second, "nmcli", "connection", "up", prev); err == nil {
+			// Switching back to the NM AP profile does not recreate the
+			// standalone NAT/MAC-filter rules removed above, so re-apply them.
+			if err := m.applyAPNAT(ctx, cfg.Wifi.Interface, m.defaultRouteIface(ctx)); err != nil {
+				m.log.Printf("恢复热点后应用 NAT 失败: %v", err)
+			}
+			if err := m.syncBlockedSet(ctx); err != nil {
+				m.log.Printf("恢复热点后同步 MAC 黑名单失败: %v", err)
+			}
 			return nil
 		} else {
 			m.log.Printf("恢复原热点连接 %s 失败: %v", prev, err)
@@ -641,13 +798,18 @@ func (m *Manager) watchdogStep(ctx context.Context) {
 	if !br.Active {
 		return
 	}
-	if !m.bridgeAPRunning(ctx) {
-		m.log.Printf("检测到桥接 AP 已退出，尝试重启")
-		if err := m.startBridgeAP(ctx); err != nil {
-			m.bridgeMu.Lock()
-			m.bridge.LastError = err.Error()
-			m.bridgeMu.Unlock()
+	if br.Mode != "usb" {
+		if !m.bridgeAPRunning(ctx) {
+			m.log.Printf("检测到桥接 AP 已退出，尝试重启")
+			if err := m.startBridgeAP(ctx); err != nil {
+				m.bridgeMu.Lock()
+				m.bridge.LastError = err.Error()
+				m.bridgeMu.Unlock()
+			}
 		}
+	} else if br.APInterface != "" && m.ifaceIPv4(ctx, br.APInterface) == "" {
+		m.log.Printf("USB 下游接口 %s 没有地址，尝试重新连接", br.APInterface)
+		_, _ = m.Run(ctx, 30*time.Second, "nmcli", "device", "connect", br.APInterface)
 	}
 	if br.UpstreamIface == "" {
 		return
@@ -671,6 +833,78 @@ func (m *Manager) watchdogStep(ctx context.Context) {
 	// it has been down; only the operator or cellular data may stop the bridge.
 	m.log.Printf("上游 WiFi 无地址（已 %s），尝试重新连接", downFor.Round(time.Second))
 	_, _ = m.Run(ctx, 45*time.Second, "nmcli", "connection", "up", cfg.Wifi.Bridge.UpstreamConnection)
+}
+
+// PortalProbe is the result of checking whether the upstream WiFi is behind
+// a captive portal.
+type PortalProbe struct {
+	Online     bool   `json:"online"`
+	PortalURL  string `json:"portal_url,omitempty"`
+	Status     int    `json:"status,omitempty"`
+	CheckedURL string `json:"checked_url,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// ProbePortal performs a small HTTP connectivity check through the current
+// default route and reports the redirect target when a captive portal is
+// present.
+func (m *Manager) ProbePortal(ctx context.Context) PortalProbe {
+	cfg := m.Config()
+	if !m.BridgeActive() || (cfg.Wifi.Bridge.Mode != "" && cfg.Wifi.Bridge.Mode != "usb") {
+		return PortalProbe{Error: "请先启用 WiFi 共享"}
+	}
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	client := &http.Client{
+		Timeout: 8 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				// Captive portals are usually IPv4-only.
+				return dialer.DialContext(ctx, "tcp4", addr)
+			},
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	probe := func(rawURL string) PortalProbe {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return PortalProbe{CheckedURL: rawURL, Error: err.Error()}
+		}
+		req.Header.Set("User-Agent", "uz801d-portal-probe")
+		resp, err := client.Do(req)
+		if err != nil {
+			return PortalProbe{CheckedURL: rawURL, Error: err.Error()}
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		res := PortalProbe{CheckedURL: rawURL, Status: resp.StatusCode}
+		if resp.StatusCode == http.StatusNoContent {
+			res.Online = true
+			return res
+		}
+		if loc, err := resp.Location(); err == nil && loc.String() != "" {
+			res.PortalURL = loc.String()
+			return res
+		}
+		// Apple's hotspot probe returns "Success" in the body when online.
+		if resp.StatusCode == http.StatusOK && strings.Contains(strings.ToLower(string(body)), "success") {
+			res.Online = true
+			return res
+		}
+		res.PortalURL = resp.Request.URL.String()
+		return res
+	}
+	res := probe("http://connectivitycheck.gstatic.com/generate_204")
+	if res.Error != "" {
+		// Chinese networks sometimes block Google's probe; try a domestic one.
+		res = probe("http://connectivitycheck.platform.hicloud.com/generate_204")
+	}
+	if res.Error != "" {
+		res = probe("http://captive.apple.com/hotspot-detect.html")
+	}
+	return res
 }
 
 // BridgeScan scans for upstream networks using the configured radio.

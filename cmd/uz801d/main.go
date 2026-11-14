@@ -1,4 +1,4 @@
-// Command uz801d is the UZ801 / OpenStick web management daemon.
+// Command uz801d is the MSM8916 (Qualcomm 8916) OpenStick web management daemon.
 package main
 
 import (

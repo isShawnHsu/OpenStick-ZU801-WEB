@@ -64,7 +64,7 @@ func (m *Manager) SampleTraffic(ctx context.Context) error {
 	if iface == "" {
 		iface = cfg.Modem.Interface
 	}
-	curRX, curTX, err := readNetCounters(iface)
+	curRX, curTX, src, err := m.readTrafficCounters(ctx, iface)
 	if err != nil {
 		m.trafficMu.Lock()
 		m.traffic.lastAt = time.Now()
@@ -77,7 +77,9 @@ func (m *Manager) SampleTraffic(ctx context.Context) error {
 	m.trafficMu.Lock()
 	tr := &m.traffic
 	var dRX, dTX int64
-	if tr.sampled && !tr.lastAt.IsZero() {
+	// A source change (or the first sample) only rebases the counters: taking a
+	// delta between two different sources would produce garbage.
+	if tr.sampled && !tr.lastAt.IsZero() && src == tr.src {
 		dRX = curRX - tr.lastRX
 		dTX = curTX - tr.lastTX
 		if dRX < 0 {
@@ -96,6 +98,7 @@ func (m *Manager) SampleTraffic(ctx context.Context) error {
 	tr.lastTX = curTX
 	tr.lastAt = now
 	tr.sampled = true
+	tr.src = src
 	tr.period = period
 	m.trafficMu.Unlock()
 
@@ -193,6 +196,7 @@ func (m *Manager) ResetTraffic() {
 	m.traffic.lastRX = 0
 	m.traffic.lastTX = 0
 	m.traffic.sampled = false
+	m.traffic.src = ""
 	m.traffic.rxRate = 0
 	m.traffic.txRate = 0
 	m.trafficMu.Unlock()
@@ -222,6 +226,85 @@ func (m *Manager) SetTrafficConfig(iface string, quota int64, resetDay int, enfo
 		c.Data.EnforceQuota = enforce
 		return nil
 	})
+}
+
+// readTrafficCounters returns byte counters for the cellular data path.
+//
+// The kernel netdev counters are useless on MSM8916 + bam-dmux: data goes over
+// the BAM pipes and /sys/class/net/wwan0/statistics stays at zero. Reading the
+// modem's own QMI counters is not an option either, because bam-dmux allows a
+// single QMI client and opening one kicks ModemManager off the port (which
+// makes the modem re-enumerate in a loop).
+//
+// So we count packets with two iptables rules instead:
+//
+//	mangle PREROUTING  -i <iface>  (everything the modem delivers)
+//	mangle POSTROUTING -o <iface>  (everything sent to the modem)
+//
+// That covers both the device's own traffic and forwarded hotspot traffic, and
+// it does not interfere with ModemManager. Fall back to the netdev counters
+// when iptables is unavailable.
+func (m *Manager) readTrafficCounters(ctx context.Context, iface string) (rx, tx int64, src string, err error) {
+	if iface != "" && m.Available("iptables") {
+		m.ensureTrafficRules(ctx, iface)
+		if r, t, ok := m.readIptablesCounters(ctx); ok {
+			return r, t, "iptables", nil
+		}
+	}
+	r, t, nerr := readNetCounters(iface)
+	if nerr != nil {
+		return 0, 0, "net", nerr
+	}
+	return r, t, "net", nil
+}
+
+// Traffic accounting rules live in the mangle table so they never influence
+// forwarding decisions.
+const (
+	trafficRXComment = "uz801d-rx"
+	trafficTXComment = "uz801d-tx"
+)
+
+func (m *Manager) ensureTrafficRules(ctx context.Context, iface string) {
+	specs := [][]string{
+		{"-t", "mangle", "PREROUTING", "-i", iface, "-m", "comment", "--comment", trafficRXComment, "-j", "RETURN"},
+		{"-t", "mangle", "POSTROUTING", "-o", iface, "-m", "comment", "--comment", trafficTXComment, "-j", "RETURN"},
+	}
+	for _, spec := range specs {
+		check := append([]string{spec[0], spec[1], "-C"}, spec[2:]...)
+		if _, err := m.Run(ctx, 5*time.Second, "iptables", check...); err == nil {
+			continue
+		}
+		add := append([]string{spec[0], spec[1], "-A"}, spec[2:]...)
+		_, _ = m.Run(ctx, 5*time.Second, "iptables", add...)
+	}
+}
+
+func (m *Manager) readIptablesCounters(ctx context.Context) (int64, int64, bool) {
+	rx, okRX := m.readIptablesChain(ctx, "PREROUTING", trafficRXComment)
+	tx, okTX := m.readIptablesChain(ctx, "POSTROUTING", trafficTXComment)
+	return rx, tx, okRX && okTX
+}
+
+func (m *Manager) readIptablesChain(ctx context.Context, chain, comment string) (int64, bool) {
+	out, err := m.Run(ctx, 5*time.Second, "iptables", "-t", "mangle", "-L", chain, "-v", "-x", "-n")
+	if err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, comment) {
+			continue
+		}
+		fields := strings.Fields(line)
+		// pkts bytes target prot opt in out source destination /* comment */
+		if len(fields) < 2 {
+			continue
+		}
+		if v, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+			return v, true
+		}
+	}
+	return 0, false
 }
 
 func readNetCounters(iface string) (int64, int64, error) {

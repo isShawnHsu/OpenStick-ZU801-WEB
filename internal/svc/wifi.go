@@ -48,40 +48,70 @@ func (m *Manager) WifiStatus(ctx context.Context) *WifiStatus {
 		Hidden:      cfg.Wifi.Hidden,
 	}
 	br := m.BridgeSnapshot()
+	// USB sharing keeps wlan0 as a station; it must not be reported as a
+	// running hotspot. Only the legacy AP-STA relay owns a real AP interface.
+	usbShare := br.Active && (br.Mode == "usb" || cfg.Wifi.Bridge.Mode == "usb")
 	if br.Active {
 		st.Bridge = true
-		st.APInterface = br.APInterface
-		st.Channel = br.Channel
-		st.Backend = "hostapd"
+		if !usbShare {
+			st.APInterface = br.APInterface
+			st.Channel = br.Channel
+			st.Backend = "hostapd"
+		}
 	}
 	if st.APInterface == "" {
 		return st
 	}
 	ifm := parse.ParseIWInfo(m.RunTry(ctx, 3*time.Second, "iw", "dev", st.APInterface, "info"))
+	apMode := true
 	if ifm.Interface != "" {
 		st.Up = true
-		if ifm.SSID != "" {
-			st.SSID = ifm.SSID
-		}
-		if ifm.Channel > 0 {
-			st.Channel = ifm.Channel
+		// A managed (STA) interface is not a hotspot: do not report its
+		// upstream SSID/clients as if the AP were running.
+		apMode = strings.EqualFold(ifm.Type, "AP")
+		if apMode {
+			if ifm.SSID != "" {
+				st.SSID = ifm.SSID
+			}
+			if ifm.Channel > 0 {
+				st.Channel = ifm.Channel
+			}
 		}
 	}
 	if out, err := m.Run(ctx, 3*time.Second, "ip", "link", "show", "dev", st.APInterface); err == nil {
 		st.Up = strings.Contains(out, "state UP") || strings.Contains(out, "state UNKNOWN")
 	}
-	if out, err := m.Run(ctx, 4*time.Second, "iw", "dev", st.APInterface, "station", "dump"); err == nil {
-		st.Clients = len(parse.ParseStations(out))
+	if apMode {
+		if out, err := m.Run(ctx, 4*time.Second, "iw", "dev", st.APInterface, "station", "dump"); err == nil {
+			st.Clients = len(parse.ParseStations(out))
+		}
 	}
 	if m.Available("nmcli") {
+		connName := cfg.Wifi.Connection
+		if connName == "" {
+			connName = apNMConnection
+		}
+		// Use the active-connection list, not the device status: after a stop,
+		// NetworkManager can keep showing the old profile on the device for a
+		// while even though the AP connection is already down.
+		activeConn := ""
+		if out, err := m.Run(ctx, 5*time.Second, "nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"); err == nil {
+			for _, line := range strings.Split(out, "\n") {
+				f := parse.SplitTerse(line)
+				if len(f) >= 2 && f[0] != "" && f[1] == st.APInterface {
+					activeConn = f[0]
+					break
+				}
+			}
+		}
 		out, err := m.Run(ctx, 5*time.Second, "nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status")
 		if err == nil {
 			if entry, ok := parse.ParseNMDeviceStatus(out)[st.APInterface]; ok {
 				st.State = entry[1]
-				if entry[2] != "" && entry[2] != "--" {
-					st.Active = true
-				}
 			}
+		}
+		if apMode && activeConn == connName {
+			st.Active = true
 		}
 	}
 	// The hostapd backend is not tracked by NetworkManager, so a running
@@ -93,7 +123,7 @@ func (m *Manager) WifiStatus(ctx context.Context) *WifiStatus {
 		}
 		st.Backend = "hostapd"
 	}
-	if br.Active {
+	if br.Active && !usbShare {
 		st.Active = true
 	}
 	return st
@@ -188,6 +218,21 @@ func parseIWScan(text string) []parse.WifiNetwork {
 	return out
 }
 
+// StartWifi ensures the local access point is running. If WiFi sharing is
+// active it is stopped first, so the hotspot and sharing remain mutually
+// exclusive on the single radio.
+func (m *Manager) StartWifi(ctx context.Context) error {
+	if m.BridgeActive() {
+		if err := m.DisableBridge(ctx); err != nil {
+			return fmt.Errorf("退出 WiFi 共享失败: %w", err)
+		}
+	}
+	// The operator explicitly chose the hotspot; keep the automatic bridge
+	// state machine from switching back to sharing on the next tick.
+	m.SuppressAutoBridge()
+	return m.ApplyWifi(ctx)
+}
+
 // ApplyWifi writes and activates the configured access point.
 func (m *Manager) ApplyWifi(ctx context.Context) error {
 	cfg := m.Config()
@@ -256,7 +301,9 @@ func (m *Manager) applyWifiNM(ctx context.Context, cfg *config.Config) error {
 	if cfg.Wifi.Channel > 0 {
 		args = append(args, "802-11-wireless.channel", strconv.Itoa(cfg.Wifi.Channel))
 	} else {
-		args = append(args, "802-11-wireless.channel", "0")
+		// NetworkManager rejects the numeric value 0; an empty value clears
+		// the channel and restores automatic selection.
+		args = append(args, "802-11-wireless.channel", "")
 	}
 	if cfg.Wifi.Security == "open" {
 		args = append(args, "802-11-wireless-security.key-mgmt", "none")
@@ -268,7 +315,26 @@ func (m *Manager) applyWifiNM(ctx context.Context, cfg *config.Config) error {
 			"802-11-wireless-security.psk", cfg.Wifi.Password)
 	}
 	if _, err := m.Run(ctx, 20*time.Second, "nmcli", args...); err != nil {
-		return fmt.Errorf("配置热点失败: %w", err)
+		// NetworkManager 1.30 (Debian bullseye) rejects ipv4.dns for
+		// method=shared; in that mode the internal dnsmasq owns DNS anyway.
+		// Retry without the DNS property so older devices can still start
+		// the AP.
+		if strings.Contains(err.Error(), "ipv4.dns") {
+			withoutDNS := make([]string, 0, len(args))
+			for i := 0; i < len(args); i++ {
+				if args[i] == "ipv4.dns" {
+					i++ // skip the value that follows
+					continue
+				}
+				withoutDNS = append(withoutDNS, args[i])
+			}
+			if _, retryErr := m.Run(ctx, 20*time.Second, "nmcli", withoutDNS...); retryErr != nil {
+				return fmt.Errorf("配置热点失败: %w", retryErr)
+			}
+			m.log.Printf("NetworkManager 不支持 shared 模式下的 ipv4.dns，已忽略 LAN DNS 设置")
+		} else {
+			return fmt.Errorf("配置热点失败: %w", err)
+		}
 	}
 	// Older NetworkManager versions do not expose this property.
 	_, _ = m.Run(ctx, 10*time.Second, "nmcli", "connection", "modify", conn,

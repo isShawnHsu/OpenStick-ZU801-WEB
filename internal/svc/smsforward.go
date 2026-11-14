@@ -89,7 +89,7 @@ func (m *Manager) resetSMSForwardBaseline() {
 func (m *Manager) TestSMSForward(ctx context.Context, target config.SMSForwardTarget) error {
 	msg := SMS{
 		Number:    "10086",
-		Text:      "这是一条来自 UZ801 Manager 的测试消息。收到它说明短信转发配置正确。",
+		Text:      "这是一条来自 MSM8916 Manager 的测试消息。收到它说明短信转发配置正确。",
 		Timestamp: time.Now().Format(time.RFC3339),
 		State:     "received",
 	}

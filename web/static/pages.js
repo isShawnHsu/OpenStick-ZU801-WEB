@@ -1,4 +1,4 @@
-/* UZ801 Manager - page renderers */
+/* MSM8916 Manager - page renderers */
 function get(o, path, def) {
   try {
     var v = path.split('.').reduce(function (a, k) { return a == null ? undefined : a[k]; }, o);
@@ -63,8 +63,18 @@ function flightButton(on) {
     : '<button class="ghost" data-action="flight-on">' + esc(t('cell.flightEnable')) + '</button>';
 }
 
-function ifaceTable(net) {
+function ifaceTable(net, showAll) {
   var list = get(net, 'interfaces', []);
+  if (!showAll) {
+    // Keep the status page focused: hide loopback and the unused Qualcomm
+    // BAM-DMUX channels (wwan1..wwan7). The network page still shows all.
+    list = list.filter(function (i) {
+      var name = (i && i.name) || '';
+      if (name === 'lo') return false;
+      if (/^wwan[1-9][0-9]*$/.test(name) && String((i && i.state) || '').toLowerCase() !== 'up' && !(i && i.address)) return false;
+      return true;
+    });
+  }
   if (!list.length) return '<p class="muted">' + esc(t('common.none')) + '</p>';
   var rows = list.map(function (i) {
     var addr = i.address ? i.address + '/' + i.prefix : '-';
@@ -81,7 +91,7 @@ function ifaceTable(net) {
 function loginView() {
   var noPass = state.session && state.session.password_set === false;
   return '<div class="login-wrap"><div class="login-card">' +
-    '<div class="brand big"><span class="dot ok"></span> UZ801 Manager</div>' +
+    '<div class="brand big"><span class="dot ok"></span> MSM8916 Manager</div>' +
     '<p class="muted">' + esc(t('login.subtitle')) + '</p>' +
     (noPass ? '<div class="note bad">' + esc(t('login.no_password')) + '</div>' : '') +
     '<form data-form="login" class="stack">' +
@@ -117,7 +127,7 @@ function dashboardView(d) {
     cellBody = kv(t('dash.operator'), esc(info.operator_name || '-')) +
       kv(t('dash.registration'), esc(info.registration || '-')) +
       kv(t('dash.tech'), esc((info.access_tech || []).join(', ') || '-')) +
-      kv(t('dash.signal'), bar(q, signalKind(q)) + '<span class="small">' + q + '%</span>') +
+      kv(t('dash.signal'), '<span class="meter-val">' + bar(q, signalKind(q)) + '<span class="small">' + q + '%</span></span>') +
       kv('IP', esc(modem.ip || '-')) +
       kv('APN', esc(modem.profile || info.apn || '-')) +
       (modem.connected ? pill(t('common.connected'), 'ok') : pill(t('common.disconnected'), 'bad')) +
@@ -131,7 +141,8 @@ function dashboardView(d) {
     ? kv('IMSI', esc(shortMask(get(modem, 'sim.imsi', ''), 8))) +
       kv('ICCID', esc(shortMask(get(modem, 'sim.iccid', ''), 10))) +
       kv(t('dash.operator'), esc(get(modem, 'sim.operator_name', '-') || '-')) +
-      (info.unlock_required ? '<div class="note warn">' + esc(t('dash.unlock')) + ': ' + esc(info.unlock_required) + '</div>' : '')
+      (info.unlock_required ? '<div class="note warn">' + esc(t('dash.unlock')) + ': ' + esc(info.unlock_required) + '</div>' : '') +
+      (info.unlock_note ? '<div class="note small">' + esc(t('dash.pin2Note')) + '</div>' : '')
     : '<div class="note warn">' + esc(t('dash.noSim')) + '</div>' +
       (bridge.active ? '<p class="small muted">' + esc(t('bridge.active')) + '</p>' : '');
 
@@ -139,7 +150,7 @@ function dashboardView(d) {
     kv(t('common.channel'), esc(wifi.channel || '-')) +
     kv(t('dash.connections'), esc(online)) +
     (wifi.bridge ? pill(t('wifi.bridgeActive'), 'warn') : (wifi.active ? pill(t('common.enabled'), 'ok') : pill(t('common.disabled'), 'bad'))) +
-    '<div class="btn-row"><button class="ghost" data-action="wifi-restart">' + esc(t('dash.restartWifi')) + '</button></div>';
+    '<div class="btn-row"><button class="ghost" data-action="wifi-restart">' + esc(wifi.active ? t('dash.restartWifi') : t('wifi.start')) + '</button></div>';
 
   var bridgeBody = (bridge.active ? pill(t('dash.bridgeOn'), 'ok') : pill(t('dash.bridgeOff'), 'bad')) +
     kv(t('dash.upstream'), esc(bridge.upstream_ssid || get(bridge, 'config.upstream_ssid', '-') || '-')) +
@@ -159,7 +170,7 @@ function dashboardView(d) {
     kv(t('dash.temp'), '<span class="' + tempKind + '">' + temp.toFixed(1) + ' °C</span>') +
     kv(t('dash.freq'), esc(get(sys, 'cpu.freq_mhz', '-') + ' MHz')) +
     kv(t('dash.governor'), esc(get(sys, 'cpu.governor', '-'))) +
-    kv(t('common.memory'), bar(memPct) + '<span class="small">' + esc(bytes(memUsed)) + ' / ' + esc(bytes(memTotal)) + '</span>') +
+    kv(t('common.memory'), '<span class="meter-val">' + bar(memPct) + '<span class="small">' + esc(bytes(memUsed)) + ' / ' + esc(bytes(memTotal)) + '</span></span>') +
     kv(t('common.load'), esc(get(sys, 'load_text', '-') || (Number(get(sys, 'load1', 0)).toFixed(2)))) +
     kv(t('dash.uptime'), esc(sys.uptime_text || '-')) +
     kv(t('common.disk'), esc(bytes(sys.disk_used || 0)) + ' / ' + esc(bytes(sys.disk_total || 0)));
@@ -170,7 +181,7 @@ function dashboardView(d) {
     kv(t('traffic.rx'), esc(bytes(tr.rx || 0))) +
     kv(t('traffic.tx'), esc(bytes(tr.tx || 0))) +
     kv(t('dash.now'), esc(rate(tr.rx_rate || 0)) + ' / ' + esc(rate(tr.tx_rate || 0))) +
-    (quota > 0 ? kv(t('common.quota'), bar(quotaPct, quotaPct >= 90 ? 'bad' : quotaPct >= 70 ? 'warn' : '') + '<span class="small">' + esc(pct(quotaPct)) + '</span>') : '') +
+    (quota > 0 ? kv(t('common.quota'), '<span class="meter-val">' + bar(quotaPct, quotaPct >= 90 ? 'bad' : quotaPct >= 70 ? 'warn' : '') + '<span class="small">' + esc(pct(quotaPct)) + '</span></span>') : '') +
     '<div class="btn-row"><a class="btn ghost" href="#/traffic">' + esc(t('common.details')) + '</a></div>';
 
   return pageHead(t('dash.title'), sys.hostname || '', '<button class="ghost" data-action="reload">' + esc(t('dash.refresh')) + '</button>') +
@@ -186,7 +197,7 @@ function dashboardView(d) {
     card(t('dash.quick'), '<div class="quick">' +
       (modem.flight_mode ? '' : '<button data-action="' + (modem.connected ? 'modem-disconnect' : 'modem-connect') + '">' + esc(modem.connected ? t('cell.dataOff') : t('cell.dataOn')) + '</button>') +
       '<button data-action="' + (modem.flight_mode ? 'flight-off' : 'flight-on') + '">' + esc(modem.flight_mode ? t('cell.flightDisable') : t('cell.flightEnable')) + '</button>' +
-      '<button data-action="wifi-restart">' + esc(t('dash.restartWifi')) + '</button>' +
+      '<button data-action="wifi-restart">' + esc(wifi.active ? t('dash.restartWifi') : t('wifi.start')) + '</button>' +
       '<button data-action="bridge-toggle">' + esc(bridge.active ? t('dash.closeBridge') : t('dash.openBridge')) + '</button>' +
       '<a class="btn ghost" href="#/clients">' + esc(t('nav.clients')) + '</a>' +
       '<a class="btn ghost" href="#/system">' + esc(t('nav.system')) + '</a></div>');
@@ -198,7 +209,7 @@ function networkView(net) {
   var dns = (net.dns || []).map(function (d) { return '<code>' + esc(d) + '</code>'; }).join(' ') || '-';
   var out = state.cache.toolOutput || '';
   return pageHead(t('net.title'), '', '<button class="ghost" data-action="reload">' + esc(t('common.refresh')) + '</button>') +
-    card(t('net.interfaces'), ifaceTable(net)) +
+    card(t('net.interfaces'), ifaceTable(net, true) + '<p class="muted small">' + esc(t('net.muxNote')) + '</p>') +
     card(t('net.routes'), kv(t('net.gateway'), esc(net.gateway || '-')) + kv(t('net.default'), esc(net.default_iface || '-')) + kv(t('net.dns'), dns)) +
     card(t('net.tools'),
       '<div class="tools-grid">' +
@@ -263,7 +274,7 @@ function cellularView(r) {
       kv(t('cell.registration'), esc(info.registration || '-')) +
       kv(t('cell.packet'), esc(info.packet_service || '-')) +
       kv(t('cell.tech'), esc((info.access_tech || []).join(', ') || '-')) +
-      kv(t('cell.signalQuality'), bar(info.signal_quality || 0, signalKind(info.signal_quality)) + '<span class="small">' + esc(info.signal_quality || 0) + '%</span>') +
+      kv(t('cell.signalQuality'), '<span class="meter-val">' + bar(info.signal_quality || 0, signalKind(info.signal_quality)) + '<span class="small">' + esc(info.signal_quality || 0) + '%</span></span>') +
       kv('IP', esc(st.ip || '-')) +
       kv(t('cell.imei'), esc(info.imei || '-')) +
       kv(t('cell.firmware'), esc(info.revision || '-')) +
@@ -279,7 +290,9 @@ function cellularView(r) {
 
   var simBody = st.sim_present
     ? kv('IMSI', esc(get(st, 'sim.imsi', '-') || '-')) + kv('ICCID', esc(get(st, 'sim.iccid', '-') || '-')) +
-      kv(t('cell.operator'), esc(get(st, 'sim.operator_name', '-') || '-'))
+      kv(t('cell.operator'), esc(get(st, 'sim.operator_name', '-') || '-')) +
+      (get(st, 'info.unlock_required', '') ? '<div class="note warn">' + esc(t('dash.unlock')) + ': ' + esc(get(st, 'info.unlock_required', '')) + '</div>' : '') +
+      (get(st, 'info.unlock_note', '') ? '<div class="note small">' + esc(t('dash.pin2Note')) + '</div>' : '')
     : '<div class="note warn">' + esc(t('cell.noSim')) + '</div>';
 
   var ops = state.cache.operators;
@@ -408,6 +421,12 @@ function smsForwardView(fwd, error) {
 
 function smsView(r, smsError, fwdError) {
   r = r || {};
+  var reasonKey = r.reason_code ? 'sms.reason.' + r.reason_code : '';
+  var reasonText = reasonKey ? t(reasonKey) : '';
+  if (reasonText === reasonKey) reasonText = '';
+  var unavailable = r.available === false
+    ? (reasonText || r.reason || t('sms.unavailable'))
+    : '';
   var list = r.messages || [];
   var items = list.map(function (m) {
     return '<div class="sms-item' + (m.read ? '' : ' unread') + '">' +
@@ -425,19 +444,22 @@ function smsView(r, smsError, fwdError) {
     field(t('sms.text'), '<textarea name="text" rows="4" maxlength="1000" required></textarea>') +
     '</div><button class="primary" type="submit">' + esc(t('sms.send')) + '</button></form>');
 
-  var smsBlock = smsError
-    ? '<div class="note bad">' + esc(smsError) + '</div>' +
-      '<div class="btn-row"><button data-action="reload">' + esc(t('common.refresh')) + '</button></div>'
-    : compose;
+  // 没插卡 / ModemManager 不可用时只提示一句，不再把发送框和列表藏起来。
+  var notice = smsError
+    ? '<div class="note bad">' + esc(smsError) + '</div>'
+    : unavailable
+      ? '<div class="note warn">' + esc(unavailable) + '</div>'
+      : '';
 
-  var actions = smsError ? '' :
+  var actions =
     '<button class="ghost" data-action="sms-read-all">' + esc(t('sms.markAll')) + '</button>' +
     '<button class="danger" data-action="sms-delete-all">' + esc(t('sms.deleteAll')) + '</button>';
 
   return pageHead(t('sms.title'), r.unread ? r.unread + ' ' + t('sms.unread') : '', actions) +
-    smsBlock +
-    smsForwardView(state.cache.smsForward, fwdError) +
-    (smsError ? '' : card(t('sms.list'), items || '<p class="muted">' + esc(t('sms.empty')) + '</p>'));
+    notice +
+    compose +
+    card(t('sms.list'), items || '<p class="muted">' + esc(t('sms.empty')) + '</p>') +
+    smsForwardView(state.cache.smsForward, fwdError);
 }
 
 /* ---------------------------------------------------------------- WiFi */
@@ -445,6 +467,8 @@ function smsView(r, smsError, fwdError) {
 function wifiView(r) {
   var st = r.status || {};
   var c = r.config || {};
+  var channelOptions = [[0, t('wifi.auto')]];
+  for (var ch = 1; ch <= 14; ch++) channelOptions.push([ch, String(ch)]);
   var scan = state.cache.wifiScan;
   var scanHtml = '';
   if (scan && scan.length) {
@@ -456,9 +480,12 @@ function wifiView(r) {
   } else {
     scanHtml = '<p class="muted">' + esc(t('wifi.scanEmpty')) + '</p>';
   }
-  return pageHead(t('wifi.title'), st.ssid || '',
-    '<button class="ghost" data-action="wifi-restart">' + esc(t('wifi.restart')) + '</button>' +
-    '<button class="danger" data-action="wifi-stop">' + esc(t('wifi.stop')) + '</button>') +
+  var wifiActions = st.active
+    ? '<button class="ghost" data-action="wifi-restart">' + esc(t('wifi.restart')) + '</button>' +
+      '<button class="danger" data-action="wifi-stop">' + esc(t('wifi.stop')) + '</button>'
+    : '<button class="primary" data-action="wifi-restart">' + esc(t('wifi.start')) + '</button>';
+
+  return pageHead(t('wifi.title'), st.ssid || '', wifiActions) +
     (st.bridge ? '<div class="note warn">' + esc(t('wifi.bridgeActive')) + '</div>' : '') +
     card(t('wifi.status'),
       '<div class="status-line">' + (st.active ? pill(t('common.enabled'), 'ok') : pill(t('common.disabled'), 'bad')) +
@@ -474,7 +501,7 @@ function wifiView(r) {
       field(t('wifi.password'), '<input type="text" name="password" value="' + attr(c.password || '') + '" autocomplete="new-password">') +
       field(t('wifi.security'), sel('security', c.security || 'wpa2', [['wpa2', t('wifi.wpa2')], ['wpa3', t('wifi.wpa3')], ['open', t('wifi.open')]])) +
       field(t('wifi.band'), '<input type="text" name="band" value="2.4 GHz" disabled>') +
-      field(t('wifi.channel'), '<input type="number" name="channel" min="0" max="14" value="' + attr(c.channel || 0) + '">') +
+      field(t('wifi.channel'), sel('channel', c.channel || 0, channelOptions)) +
       field(t('wifi.maxClients'), '<input type="number" name="max_clients" min="1" max="64" value="' + attr(c.max_clients || 10) + '">') +
       field(t('wifi.country'), txt('country', c.country || 'CN', 'CN')) +
       field(t('wifi.backend'), sel('backend', c.backend || 'auto', [['auto', 'Auto'], ['nmcli', 'NetworkManager'], ['hostapd', 'hostapd'], ['none', 'None']])) +
@@ -504,33 +531,56 @@ function bridgeView(r) {
   var capBody = '<div class="status-line">' +
     (cap.supported ? pill(t('bridge.supported'), 'ok') : pill(t('bridge.unsupported'), 'warn')) + '</div>' +
     '<p class="muted">' + esc(cap.reason || '') + '</p>' +
-    (cap.external_ap ? '<p class="small">' + esc(t('bridge.externalHint', { n: cap.external_ap })) + '</p>' : '') +
     (cap.interfaces && cap.interfaces.length ? '<p class="muted small">' + esc(cap.interfaces.join(', ')) + '</p>' : '') +
-    check('force', c.force, t('bridge.force')) +
     '<p class="small muted">' + esc(t('bridge.warning')) + '</p>';
 
   var statusBody = '<div class="status-line">' + (st.active ? pill(t('bridge.active'), 'ok') : pill(t('bridge.inactive'), 'bad')) + '</div>' +
     '<div class="grid two">' +
     kv(t('bridge.upstream'), esc(st.upstream_ssid || c.upstream_ssid || '-')) +
     kv(t('bridge.upstream') + ' IP', esc(st.upstream_ip || '-')) +
-    kv(t('bridge.ap'), esc(st.ap_interface || '-')) +
-    kv(t('common.channel'), esc(st.channel || '-')) +
+    kv(t('bridge.downstream'), esc(st.downstream_interface || st.ap_interface || '-')) +
+    kv(t('bridge.downstream') + ' IP', esc(st.downstream_ip || '-')) +
     kv(t('bridge.started'), esc(st.started_at ? dateText(st.started_at) : '-')) +
     kv(t('bridge.lastError'), esc(st.last_error || '-')) +
     '</div>';
 
-  return pageHead(t('bridge.title'), t('bridge.desc'),
-    '<button class="primary" data-action="bridge-enable">' + esc(t('bridge.enable')) + '</button>' +
-    '<button class="danger" data-action="bridge-disable">' + esc(t('bridge.disable')) + '</button>') +
+  var portalBody;
+  if (!st.active) {
+    portalBody = '<p class="muted small">' + esc(t('bridge.portalIdle')) + '</p>';
+  } else {
+    var portal = state.cache.portal;
+    var portalResult = '<p class="muted small">' + esc(t('bridge.portalIdle')) + '</p>';
+    if (portal) {
+      if (portal.online) {
+        portalResult = '<div class="status-line">' + pill(t('bridge.portalOnline'), 'ok') + '</div>';
+      } else if (portal.portal_url) {
+        portalResult = '<div class="status-line">' + pill(t('bridge.portalDetected'), 'warn') + '</div>' +
+          '<p><a href="' + attr(portal.portal_url) + '" target="_blank" rel="noopener noreferrer">' + esc(portal.portal_url) + '</a></p>' +
+          '<p class="muted small">' + esc(t('bridge.portalHint')) + '</p>';
+      } else {
+        portalResult = '<div class="note bad">' + esc(portal.error || t('bridge.portalError')) + '</div>';
+      }
+      if (portal.checked_url) {
+        portalResult += '<p class="muted small">' + esc(t('bridge.portalChecked')) + ': ' + esc(portal.checked_url) + '</p>';
+      }
+    }
+    portalBody = '<div class="btn-row"><button class="ghost" data-action="bridge-portal">' + esc(t('bridge.detectPortal')) + '</button></div>' + portalResult;
+  }
+
+  var headActions = st.active
+    ? '<button class="danger" data-action="bridge-disable">' + esc(t('bridge.disable')) + '</button>'
+    : '<button class="primary" data-action="bridge-enable">' + esc(t('bridge.enable')) + '</button>';
+
+  return pageHead(t('bridge.title'), t('bridge.desc'), headActions) +
     card(t('bridge.capability'), capBody) +
     card(t('bridge.status'), statusBody) +
+    card(t('bridge.portal'), portalBody) +
     card(t('bridge.title'), '<form data-form="bridge" class="stack">' +
       '<div class="form-grid">' +
       field(t('bridge.upstreamSsid'), txt('upstream_ssid', c.upstream_ssid || '', 'Upstream WiFi')) +
       field(t('bridge.upstreamPassword'), '<input type="text" name="upstream_password" value="' + attr(c.upstream_password || '') + '">') +
       field(t('bridge.upstreamSecurity'), sel('upstream_security', c.upstream_security || 'wpa2', [['wpa2', t('wifi.wpa2')], ['wpa3', t('wifi.wpa3')], ['open', t('wifi.open')], ['auto', 'Auto']])) +
-      field(t('bridge.apInterface'), sel('ap_interface', c.ap_interface || 'auto', [['auto', t('bridge.autoIface')], ['uap0', 'uap0']].concat((cap.interfaces || []).filter(function (x) { return x !== 'uap0'; }).map(function (x) { return [x, x]; })))) +
-      field(t('bridge.channel'), '<input type="number" name="channel" min="0" max="14" value="' + attr(c.channel || 0) + '">') +
+      field(t('bridge.downstream'), '<input type="text" name="downstream_interface" value="' + attr(c.downstream_interface || 'usb0') + '" placeholder="usb0">') +
       field(t('bridge.routeMetric'), '<input type="number" name="route_metric" min="0" max="99999" value="' + attr(c.route_metric || 50) + '">') +
       '</div>' +
       check('auto', c.auto, t('bridge.auto')) +
@@ -640,7 +690,7 @@ function trafficView(st) {
 
 /* ---------------------------------------------------------------- system */
 
-function systemView(sys, leds) {
+function systemView(sys, leds, ledControl) {
   var cpu = sys.cpu || {};
   var mem = sys.memory || {};
   var bat = sys.battery || {};
@@ -653,9 +703,26 @@ function systemView(sys, leds) {
     kv(t('system.timezone'), esc(sys.timezone || '-')) +
     kv(t('system.time'), esc(sys.time ? dateText(sys.time) : '-')) +
     kv(t('common.temperature'), esc((Number(cpu.temp_c || 0)).toFixed(1)) + ' °C') +
-    kv(t('common.memory'), esc(bytes(mem.used || 0)) + ' / ' + esc(bytes(mem.total || 0))) +
-    kv(t('common.disk'), esc(bytes(sys.disk_used || 0)) + ' / ' + esc(bytes(sys.disk_total || 0))) +
+    kv(t('common.memory'), '<span class="nowrap">' + esc(bytes(mem.used || 0)) + ' / ' + esc(bytes(mem.total || 0)) + '</span>') +
+    kv(t('common.disk'), '<span class="nowrap">' + esc(bytes(sys.disk_used || 0)) + ' / ' + esc(bytes(sys.disk_total || 0)) + '</span>') +
     (bat.present ? kv(t('system.battery'), esc(bat.capacity || 0) + '% · ' + esc(bat.status || '')) : '');
+
+  var ledc = ledControl || {};
+  var ledState = '<div class="status-line">' +
+    (ledc.active_off ? pill(t('system.ledsOffNow'), 'warn') : pill(t('system.ledsOnNow'), 'ok')) +
+    '</div>';
+  var ledControlForm = '<form data-form="led-control" class="stack">' +
+    '<div class="form-grid">' +
+    check('off', ledc.off, t('system.ledOff')) +
+    check('schedule_enabled', ledc.schedule_enabled, t('system.ledSchedule')) +
+    field(t('system.ledOffTime'), '<input type="time" name="off_time" value="' + attr(ledc.off_time || '22:00') + '">') +
+    field(t('system.ledOnTime'), '<input type="time" name="on_time" value="' + attr(ledc.on_time || '07:00') + '">') +
+    '</div>' +
+    '<p class="muted small">' + esc(t('system.ledScheduleHint')) + '</p>' +
+    '<p class="muted small">' + esc(t('system.ledEmcNote')) + '</p>' +
+    '<p class="muted small">' + esc(t('system.ledBoardNote')) + '</p>' +
+    '<div class="btn-row"><button class="primary" type="submit">' + esc(t('common.save')) + '</button></div>' +
+    '</form>';
 
   var ledRows = (leds || []).map(function (l) {
     return '<tr><td><code>' + esc(l.name) + '</code></td><td>' + esc(l.trigger || '-') + '</td><td>' + esc(l.brightness) + ' / ' + esc(l.max) + '</td>' +
@@ -697,9 +764,9 @@ function systemView(sys, leds) {
       '<button class="ghost" type="button" data-action="frpc-log-load">' + esc(t('system.loadLogs')) + '</button></div>' +
       '<p class="muted small">' + esc(t('system.frpcLogHint')) + '</p></form>' +
       '<pre class="logs">' + esc(frpcLog || t('system.frpcLogEmpty')) + '</pre>') +
-    card(t('system.leds'), ledRows
+    card(t('system.leds'), ledState + ledControlForm + (ledRows
       ? '<div class="table-wrap"><table><thead><tr><th>' + esc(t('system.ledName')) + '</th><th>' + esc(t('system.trigger')) + '</th><th>' + esc(t('system.brightness')) + '</th><th class="row-actions">' + esc(t('common.actions')) + '</th></tr></thead><tbody>' + ledRows + '</tbody></table></div>'
-      : '<p class="muted">' + esc(t('system.noLeds')) + '</p>') +
+      : '<p class="muted">' + esc(t('system.noLeds')) + '</p>')) +
     card(t('system.ping'), '<div class="inline-form">' +
       txt('target', '', '223.5.5.5') +
       '<button class="primary" data-action="diag-ping">' + esc(t('system.runPing')) + '</button>' +

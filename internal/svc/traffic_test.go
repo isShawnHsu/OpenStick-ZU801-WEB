@@ -1,11 +1,35 @@
 package svc
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"uz801d/internal/state"
 )
+
+func TestParseIptablesCounters(t *testing.T) {
+	// Output of: iptables -t mangle -L PREROUTING -v -x -n
+	out := `Chain PREROUTING (policy ACCEPT 0 packets, 0 bytes)
+    pkts      bytes target     prot opt in     out     source               destination
+      12     34567 RETURN     all  --  wwan0  *       0.0.0.0/0            0.0.0.0/0            /* uz801d-rx */
+       3      1234 ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0
+`
+	var got int64
+	var ok bool
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "uz801d-rx") {
+			continue
+		}
+		f := strings.Fields(line)
+		got, _ = strconv.ParseInt(f[1], 10, 64)
+		ok = true
+	}
+	if !ok || got != 34567 {
+		t.Fatalf("counters = %d ok=%v, want 34567", got, ok)
+	}
+}
 
 func TestPeriodStart(t *testing.T) {
 	loc := time.Local

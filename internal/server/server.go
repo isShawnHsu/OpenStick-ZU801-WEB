@@ -110,6 +110,7 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /api/bridge/enable", s.protect(s.apiBridgeEnable))
 	mux.Handle("POST /api/bridge/disable", s.protect(s.apiBridgeDisable))
 	mux.Handle("GET /api/bridge/scan", s.protect(s.apiBridgeScan))
+	mux.Handle("GET /api/bridge/portal", s.protect(s.apiBridgePortal))
 
 	mux.Handle("GET /api/clients", s.protect(s.apiClients))
 	mux.Handle("POST /api/clients/block", s.protect(s.apiClientBlock))
@@ -131,6 +132,8 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /api/system/frpc-log", s.protect(s.apiFrpcLogSave))
 	mux.Handle("GET /api/system/leds", s.protect(s.apiLEDs))
 	mux.Handle("POST /api/system/led", s.protect(s.apiLEDSet))
+	mux.Handle("GET /api/system/led-control", s.protect(s.apiLEDControl))
+	mux.Handle("POST /api/system/led-control", s.protect(s.apiLEDControlSave))
 	mux.Handle("POST /api/system/password", s.protect(s.apiPassword))
 	mux.Handle("POST /api/system/language", s.protect(s.apiLanguage))
 	mux.Handle("POST /api/system/admin-user", s.protect(s.apiAdminUser))
@@ -223,6 +226,14 @@ func (w *statusWriter) Write(p []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(p)
 	w.bytes += n
 	return n, err
+}
+
+// Flush preserves http.Flusher through the access-log wrapper. Handlers use
+// it to answer before a network switch tears down the client's path.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (s *Server) accessLog(next http.Handler) http.Handler {

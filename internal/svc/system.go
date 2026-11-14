@@ -382,13 +382,21 @@ func (m *Manager) SetLED(name, trigger string, brightness int) error {
 			return fmt.Errorf("设置亮度失败: %w", err)
 		}
 	}
-	return m.Update(func(c *config.Config) error {
+	if err := m.Update(func(c *config.Config) error {
 		if c.LEDs == nil {
 			c.LEDs = map[string]config.LEDSetting{}
 		}
 		c.LEDs[name] = config.LEDSetting{Trigger: trigger, Brightness: brightness}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	// A manual edit must not defeat an active night schedule; let the loop
+	// re-evaluate the effective state on its next tick.
+	m.ledMu.Lock()
+	m.ledApplied = false
+	m.ledMu.Unlock()
+	return nil
 }
 
 // ApplyLEDs restores persisted LED settings at startup.
@@ -398,6 +406,284 @@ func (m *Manager) ApplyLEDs() {
 			m.log.Printf("恢复 LED %s 失败: %v", name, err)
 		}
 	}
+}
+
+// LEDControlStatus is the master switch and night schedule for the LEDs.
+type LEDControlStatus struct {
+	Off             bool   `json:"off"`
+	ScheduleEnabled bool   `json:"schedule_enabled"`
+	OffTime         string `json:"off_time"`
+	OnTime          string `json:"on_time"`
+	ActiveOff       bool   `json:"active_off"`
+}
+
+// LEDControl returns the persisted settings and the currently effective state.
+func (m *Manager) LEDControl() LEDControlStatus {
+	c := m.Config().System
+	return LEDControlStatus{
+		Off:             c.LEDOff,
+		ScheduleEnabled: c.LEDScheduleEnabled,
+		OffTime:         c.LEDOffTime,
+		OnTime:          c.LEDOnTime,
+		ActiveOff:       m.ledDesiredOff(time.Now()),
+	}
+}
+
+// SetLEDControl saves the master switch and schedule, then applies it now.
+func (m *Manager) SetLEDControl(off, scheduleEnabled bool, offTime, onTime string) error {
+	offTime = strings.TrimSpace(offTime)
+	onTime = strings.TrimSpace(onTime)
+	if offTime == "" {
+		offTime = "22:00"
+	}
+	if onTime == "" {
+		onTime = "07:00"
+	}
+	ot, err := time.Parse("15:04", offTime)
+	if err != nil {
+		return fmt.Errorf("LED 关闭时间格式无效，应为 HH:MM")
+	}
+	nt, err := time.Parse("15:04", onTime)
+	if err != nil {
+		return fmt.Errorf("LED 开启时间格式无效，应为 HH:MM")
+	}
+	offTime = ot.Format("15:04")
+	onTime = nt.Format("15:04")
+	if err := m.Update(func(c *config.Config) error {
+		c.System.LEDOff = off
+		c.System.LEDScheduleEnabled = scheduleEnabled
+		c.System.LEDOffTime = offTime
+		c.System.LEDOnTime = onTime
+		return nil
+	}); err != nil {
+		return err
+	}
+	m.ledMu.Lock()
+	m.ledApplied = false
+	m.ledMu.Unlock()
+	m.applyLEDSchedule()
+	return nil
+}
+
+func (m *Manager) ledLoop(ctx context.Context) {
+	if !m.slept(5 * time.Second) {
+		return
+	}
+	m.applyLEDSchedule()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.applyLEDSchedule()
+		}
+	}
+}
+
+func (m *Manager) applyLEDSchedule() {
+	m.ledMu.Lock()
+	defer m.ledMu.Unlock()
+	desired := m.ledDesiredOff(time.Now())
+	if m.ledApplied && m.ledOff == desired {
+		return
+	}
+	m.applyLEDPower(desired)
+	m.ledApplied = true
+	m.ledOff = desired
+}
+
+func (m *Manager) ledDesiredOff(now time.Time) bool {
+	c := m.Config().System
+	if c.LEDOff {
+		return true
+	}
+	if !c.LEDScheduleEnabled {
+		return false
+	}
+	ot, err := time.Parse("15:04", c.LEDOffTime)
+	if err != nil {
+		return false
+	}
+	nt, err := time.Parse("15:04", c.LEDOnTime)
+	if err != nil {
+		return false
+	}
+	offMin := ot.Hour()*60 + ot.Minute()
+	onMin := nt.Hour()*60 + nt.Minute()
+	nowMin := now.Hour()*60 + now.Minute()
+	if offMin == onMin {
+		return false
+	}
+	if offMin < onMin {
+		return nowMin >= offMin && nowMin < onMin
+	}
+	// Crosses midnight, e.g. 22:00 -> 07:00.
+	return nowMin >= offMin || nowMin < onMin
+}
+
+func (m *Manager) applyLEDPower(off bool) {
+	leds := m.ListLEDs()
+	if off {
+		snapshot := map[string]config.LEDSetting{}
+		for _, l := range leds {
+			if !ledPowerControllable(l) {
+				continue
+			}
+			snapshot[l.Name] = config.LEDSetting{Trigger: l.Trigger, Brightness: l.Brightness}
+			if err := writeLEDRaw(l.Name, "none", 0); err != nil {
+				m.log.Printf("关闭 LED %s 失败: %v", l.Name, err)
+			}
+		}
+		if len(snapshot) > 0 {
+			if err := m.Update(func(c *config.Config) error {
+				// Keep the first snapshot: it contains the real on-state even
+				// if the daemon restarts during the night.
+				if len(c.System.LEDSnapshot) == 0 {
+					c.System.LEDSnapshot = snapshot
+				}
+				return nil
+			}); err != nil {
+				m.log.Printf("保存 LED 快照失败: %v", err)
+			}
+		}
+		// The visible power/network LEDs on MSM8916 boards are not LED-class devices:
+		// openstick-leds drives TLMM gpio6 (red power) and gpio7 (green
+		// network). Stop it so it cannot turn the red LED back on, then drive
+		// both pins low.
+		m.setOpenStickLEDService(false)
+		m.setRealStatusLEDs(false)
+		m.log.Printf("指示灯已关闭")
+		return
+	}
+
+	cfg := m.Config()
+	snapshot := cfg.System.LEDSnapshot
+	for _, l := range leds {
+		if !ledPowerControllable(l) {
+			continue
+		}
+		s, ok := snapshot[l.Name]
+		if !ok {
+			s, ok = cfg.LEDs[l.Name]
+		}
+		if !ok {
+			s = config.LEDSetting{Trigger: "none", Brightness: l.Max}
+		}
+		trigger := s.Trigger
+		if trigger == "" {
+			trigger = "none"
+		}
+		if err := writeLEDRaw(l.Name, trigger, s.Brightness); err != nil {
+			m.log.Printf("恢复 LED %s 失败: %v", l.Name, err)
+		}
+	}
+	if len(snapshot) > 0 {
+		if err := m.Update(func(c *config.Config) error {
+			c.System.LEDSnapshot = nil
+			return nil
+		}); err != nil {
+			m.log.Printf("清理 LED 快照失败: %v", err)
+		}
+	}
+	// Restore the board status service; it drives the real red power LED and
+	// the green network LED according to the default route.
+	m.setOpenStickLEDService(true)
+	m.log.Printf("指示灯已恢复")
+}
+
+// setOpenStickLEDService starts or stops the MSM8916 status LED daemon. The
+// service is part of the OpenStick base image and controls the real LEDs,
+// which are not exposed through /sys/class/leds.
+func (m *Manager) setOpenStickLEDService(on bool) {
+	if !m.Available("systemctl") {
+		return
+	}
+	action := "stop"
+	if on {
+		action = "start"
+	}
+	if _, err := m.Run(context.Background(), 20*time.Second, "systemctl", action, "openstick-leds.service"); err != nil {
+		m.log.Printf("%s openstick-leds.service 失败: %v", action, err)
+	}
+}
+
+func (m *Manager) setRealStatusLEDs(on bool) {
+	base := pinctrlBase()
+	if base <= 0 {
+		return
+	}
+	for _, n := range []int{base + 6, base + 7} {
+		ensureGPIO(n)
+		val := "0"
+		if on {
+			val = "1"
+		}
+		_ = os.WriteFile(fmt.Sprintf("/sys/class/gpio/gpio%d/value", n), []byte(val), 0o644)
+	}
+}
+
+func pinctrlBase() int {
+	chips, _ := filepath.Glob("/sys/class/gpio/gpiochip*")
+	for _, chip := range chips {
+		target, _ := filepath.EvalSymlinks(chip)
+		if !strings.Contains(target, "1000000.pinctrl") {
+			continue
+		}
+		if v, err := strconv.Atoi(sysinfo.ReadText(filepath.Join(chip, "base"), 32)); err == nil {
+			return v
+		}
+		name := filepath.Base(chip)
+		if v, err := strconv.Atoi(strings.TrimPrefix(name, "gpiochip")); err == nil {
+			return v
+		}
+	}
+	return 0
+}
+
+func ensureGPIO(n int) {
+	dir := fmt.Sprintf("/sys/class/gpio/gpio%d", n)
+	if _, err := os.Stat(dir); err != nil {
+		_ = os.WriteFile("/sys/class/gpio/export", []byte(strconv.Itoa(n)), 0o644)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "direction"), []byte("out"), 0o644)
+}
+
+// ledPowerControllable excludes the eMMC activity LED. Toggling its trigger
+// can disturb the storage controller and reboot this kernel; it is not one of
+// the user-facing indicator LEDs.
+func ledPowerControllable(l LEDInfo) bool {
+	return !strings.HasPrefix(l.Name, "mmc")
+}
+
+func writeLEDRaw(name, trigger string, brightness int) error {
+	if !regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`).MatchString(name) {
+		return fmt.Errorf("LED 名称无效")
+	}
+	dir := filepath.Join("/sys/class/leds", name)
+	if _, err := os.Stat(dir); err != nil {
+		return fmt.Errorf("LED 不存在: %s", name)
+	}
+	if trigger != "" {
+		if err := os.WriteFile(filepath.Join(dir, "trigger"), []byte(trigger), 0o644); err != nil {
+			return fmt.Errorf("设置触发器失败: %w", err)
+		}
+	}
+	max := 255
+	if v, err := strconv.Atoi(sysinfo.ReadText(filepath.Join(dir, "max_brightness"), 32)); err == nil && v > 0 {
+		max = v
+	}
+	if brightness < 0 {
+		brightness = 0
+	}
+	if brightness > max {
+		brightness = max
+	}
+	if err := os.WriteFile(filepath.Join(dir, "brightness"), []byte(strconv.Itoa(brightness)), 0o644); err != nil {
+		return fmt.Errorf("设置亮度失败: %w", err)
+	}
+	return nil
 }
 
 // Ping runs a bounded ICMP test.

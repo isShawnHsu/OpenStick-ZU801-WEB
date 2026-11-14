@@ -16,6 +16,41 @@ func TestParseModemList(t *testing.T) {
 	}
 }
 
+func TestParseModemPIN2IsNotBlocking(t *testing.T) {
+	// ModemManager reports "sim-pin2" as soon as the UIM says PIN2 is
+	// enabled-not-verified, even though PIN1 is disabled and data works.
+	data := []byte(`{
+	  "modem": {
+	    "generic": {
+	      "state": "registered",
+	      "unlock-required": "sim-pin2",
+	      "unlock-retries": ["sim-pin (3)", "sim-puk (10)", "sim-pin2 (3)", "sim-puk2 (10)"]
+	    },
+	    "3gpp": {"imei": "861716062150114"}
+	  }
+	}`)
+	info, err := ParseModem(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.UnlockRequired != "" {
+		t.Fatalf("sim-pin2 must not be reported as a blocking lock, got %q", info.UnlockRequired)
+	}
+	if info.UnlockNote != "sim-pin2" {
+		t.Fatalf("expected unlock_note=sim-pin2, got %q", info.UnlockNote)
+	}
+
+	// A real PIN1 lock must still be surfaced as blocking.
+	data = []byte(`{"modem":{"generic":{"unlock-required":"sim-pin"},"3gpp":{}}}`)
+	info, err = ParseModem(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.UnlockRequired != "sim-pin" || info.UnlockNote != "" {
+		t.Fatalf("expected blocking sim-pin, got required=%q note=%q", info.UnlockRequired, info.UnlockNote)
+	}
+}
+
 func TestParseModem(t *testing.T) {
 	data := []byte(`{
 	  "modem": {

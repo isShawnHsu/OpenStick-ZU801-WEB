@@ -570,8 +570,23 @@ func (m *Manager) connectNM(ctx context.Context, prof *config.APNProfile, cfg *c
 	if name == "" {
 		name = modemNMConnection
 	}
-	_, _ = m.Run(ctx, 10*time.Second, "nmcli", "connection", "delete", name)
-	if _, err := m.Run(ctx, 15*time.Second, "nmcli", "connection", "add", "type", "gsm",
+	// 复用已有连接：直接 delete+add 会把用户调过的 route-metric / DNS / MTU
+	// 一起冲掉（例如 4G 想比 WiFi 优先时设的 ipv4.route-metric=50）。
+	exists := false
+	if out, err := m.Run(ctx, 10*time.Second, "nmcli", "-t", "-f", "NAME", "connection", "show"); err == nil {
+		for _, line := range strings.Split(out, "\n") {
+			if strings.TrimSpace(strings.ReplaceAll(line, `\:`, ":")) == name {
+				exists = true
+				break
+			}
+		}
+	}
+	if exists {
+		if _, err := m.Run(ctx, 15*time.Second, "nmcli", "connection", "modify", name,
+			"gsm.apn", prof.APN); err != nil {
+			return fmt.Errorf("更新移动网络连接失败: %w", err)
+		}
+	} else if _, err := m.Run(ctx, 15*time.Second, "nmcli", "connection", "add", "type", "gsm",
 		"ifname", cfg.Modem.Interface, "con-name", name, "apn", prof.APN); err != nil {
 		return fmt.Errorf("创建移动网络连接失败: %w", err)
 	}
@@ -904,6 +919,24 @@ type SMS struct {
 	Read      bool   `json:"read"`
 }
 
+// SMSUnavailable explains why the SMS page cannot read messages. It returns
+// an empty reason when the modem and SIM look usable.
+func (m *Manager) SMSUnavailable(ctx context.Context) (code, reason string) {
+	if !m.Available("mmcli") {
+		return "no_modem", "未安装 ModemManager（mmcli），短信功能不可用"
+	}
+	st := m.ModemStatus(ctx)
+	switch {
+	case !st.ModemFound:
+		return "no_modem", "未检测到蜂窝模块，短信功能不可用"
+	case st.FlightMode:
+		return "flight_mode", "飞行模式已开启，短信功能不可用"
+	case !st.SIMPresent:
+		return "no_sim", "未检测到 SIM 卡，短信功能不可用"
+	}
+	return "", ""
+}
+
 // ListSMS enumerates all messages stored on the modem.
 func (m *Manager) ListSMS(ctx context.Context) ([]SMS, error) {
 	idx, err := m.modemIndexOrErr(ctx)
@@ -911,6 +944,15 @@ func (m *Manager) ListSMS(ctx context.Context) ([]SMS, error) {
 		return nil, err
 	}
 	out, err := m.mmcliJSON(ctx, 20*time.Second, "-m", idx, "--messaging-list-sms")
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "not enabled") &&
+		!m.Config().Modem.FlightMode && m.SIMPresent(ctx) {
+		// ModemManager can keep the modem disabled after a SIM hotplug or a
+		// previous modem reset. Enable it once and retry the list.
+		if _, enableErr := m.mmcli(ctx, 20*time.Second, "-m", idx, "--enable"); enableErr == nil {
+			_ = sleepCtx(ctx, 2*time.Second)
+			out, err = m.mmcliJSON(ctx, 20*time.Second, "-m", idx, "--messaging-list-sms")
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("读取短信列表失败: %w", err)
 	}

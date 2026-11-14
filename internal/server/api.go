@@ -255,6 +255,25 @@ func (s *Server) apiModemFlight(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiSMSList(w http.ResponseWriter, r *http.Request) {
 	list, err := s.m.ListSMS(r.Context())
 	if err != nil {
+		code, reason := s.m.SMSUnavailable(r.Context())
+		if reason == "" && strings.Contains(strings.ToLower(err.Error()), "not enabled") {
+			code = "not_ready"
+			reason = "蜂窝模块尚未就绪，请稍后重试"
+		}
+		if reason != "" {
+			// Keep the page usable (forwarding settings still load) and
+			// explain the missing prerequisite instead of showing a raw
+			// mmcli error.
+			ok(w, map[string]any{
+				"messages":    []svc.SMS{},
+				"unread":      0,
+				"available":   false,
+				"reason_code": code,
+				"reason":      reason,
+				"forward":     s.m.Config().SMS,
+			})
+			return
+		}
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -264,7 +283,7 @@ func (s *Server) apiSMSList(w http.ResponseWriter, r *http.Request) {
 			unread++
 		}
 	}
-	ok(w, map[string]any{"messages": list, "unread": unread, "forward": s.m.Config().SMS})
+	ok(w, map[string]any{"messages": list, "unread": unread, "available": true, "forward": s.m.Config().SMS})
 }
 
 func (s *Server) apiSMSGet(w http.ResponseWriter, r *http.Request) {
@@ -439,8 +458,7 @@ func (s *Server) apiWifiSave(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiWifiRestart(w http.ResponseWriter, r *http.Request) {
-	s.m.ResumeAutoBridge()
-	if err := s.m.ApplyWifi(r.Context()); err != nil {
+	if err := s.m.StartWifi(r.Context()); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -523,11 +541,23 @@ func (s *Server) apiBridgeEnable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiBridgeDisable(w http.ResponseWriter, r *http.Request) {
-	if err := s.m.DisableBridge(r.Context()); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+	// Send a complete response before switching wlan0 away from the upstream.
+	// Clients connected through the sharing path otherwise lose the reply and
+	// an intermediate proxy can report 502. Content-Length lets the client
+	// finish the request before the handler waits for the network switch.
+	body := []byte("{\"ok\":true,\"data\":{\"stopping\":true}}\n")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if err := s.m.DisableBridge(context.WithoutCancel(r.Context())); err != nil {
+		// The response has already been sent; the manager logs the details.
 		return
 	}
-	ok(w, s.m.BridgeStatus(r.Context()))
 }
 
 func (s *Server) apiBridgeScan(w http.ResponseWriter, r *http.Request) {
@@ -537,6 +567,10 @@ func (s *Server) apiBridgeScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, list)
+}
+
+func (s *Server) apiBridgePortal(w http.ResponseWriter, r *http.Request) {
+	ok(w, s.m.ProbePortal(r.Context()))
 }
 
 // ---------------------------------------------------------------- clients
@@ -726,6 +760,28 @@ func (s *Server) apiLEDSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, s.m.ListLEDs())
+}
+
+func (s *Server) apiLEDControl(w http.ResponseWriter, r *http.Request) {
+	ok(w, s.m.LEDControl())
+}
+
+func (s *Server) apiLEDControlSave(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Off             bool   `json:"off"`
+		ScheduleEnabled bool   `json:"schedule_enabled"`
+		OffTime         string `json:"off_time"`
+		OnTime          string `json:"on_time"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.m.SetLEDControl(body.Off, body.ScheduleEnabled, body.OffTime, body.OnTime); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, s.m.LEDControl())
 }
 
 func (s *Server) apiPassword(w http.ResponseWriter, r *http.Request) {

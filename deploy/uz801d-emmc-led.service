@@ -1,0 +1,13 @@
+[Unit]
+Description=Turn off the eMMC activity LED (guarded)
+After=local-fs.target
+# Not started by uz801d; enable manually if you accept the reboot risk.
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/uz801d-emmc-led-off
+Nice=10
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

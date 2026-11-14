@@ -1,4 +1,4 @@
-/* UZ801 Manager - dependency-free stylesheet */
+/* MSM8916 Manager - dependency-free stylesheet */
 
 :root {
   --bg: #0b1220;
@@ -244,6 +244,20 @@ main {
 .bar.warn span { background: var(--warn); }
 .bar.bad span { background: var(--bad); }
 .kv .bar { max-width: 130px; }
+.meter-val {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+.meter-val .bar {
+  flex: 0 0 90px;
+  width: 90px;
+  max-width: 90px;
+}
+.meter-val .small { white-space: nowrap; }
+.nowrap { white-space: nowrap; }
 
 .note {
   padding: 10px 12px;
@@ -563,6 +577,8 @@ td.row-actions button { margin-left: 4px; }
   .tabs a { padding: 6px 10px; font-size: .84rem; }
   .kv { flex-direction: column; align-items: flex-start; gap: 2px; }
   .kv .v { text-align: left; }
+  .meter-val { width: 100%; justify-content: space-between; }
+  .meter-val .bar { flex-basis: 80px; width: 80px; max-width: 80px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
