@@ -1,11 +1,15 @@
 package svc
 
 import (
+	"io"
+	"log"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"msm8916d/internal/config"
 	"msm8916d/internal/state"
 )
 
@@ -139,5 +143,84 @@ func TestTrafficMonthStats(t *testing.T) {
 	}
 	if out[1].Period != "2026-09" || out[2].Period != "2026-08" {
 		t.Fatalf("history order: %+v", out)
+	}
+}
+
+// TestQuotaBlockLifetime checks that the cap is a persisted state that survives
+// until it is lifted, instead of a one-shot disconnect per period.
+func TestQuotaBlockLifetime(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.Data.QuotaBytes = 100
+	cfg.Data.EnforceQuota = true
+	cfg.Data.ResetDay = 1
+
+	m, err := New(cfg, Options{
+		Store:      store,
+		ConfigPath: filepath.Join(dir, "config.json"),
+		Logger:     log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	period := billingPeriod(time.Now(), cfg.Data.ResetDay)
+	if m.QuotaBlocked() {
+		t.Fatal("quota must not be blocked before it is set")
+	}
+
+	store.Update(func(s *state.State) { s.QuotaBlockedPeriod = period })
+	if !m.QuotaBlocked() {
+		t.Fatal("quota block was not detected")
+	}
+
+	// A block recorded for a previous period must not keep the link down.
+	store.Update(func(s *state.State) { s.QuotaBlockedPeriod = "2000-01" })
+	if m.QuotaBlocked() {
+		t.Fatal("a stale period must not keep the connection blocked")
+	}
+
+	store.Update(func(s *state.State) { s.QuotaBlockedPeriod = period })
+	m.UnblockQuota()
+	if m.QuotaBlocked() {
+		t.Fatal("UnblockQuota did not clear the block")
+	}
+	// The override must survive the next sample: without it, clearing the flag
+	// while usage is still above the quota would be undone within seconds.
+	store.Update(func(s *state.State) { s.QuotaBlockedPeriod = period })
+	if m.QuotaBlocked() {
+		t.Fatal("an explicit unblock must keep the period unlocked")
+	}
+
+	// Raising the quota re-arms normal enforcement (the override is cleared).
+	if err := m.SetTrafficConfig("", 200, 1, true); err != nil {
+		t.Fatalf("SetTrafficConfig: %v", err)
+	}
+	store.Update(func(s *state.State) { s.QuotaBlockedPeriod = period })
+	if !m.QuotaBlocked() {
+		t.Fatal("raising the quota should clear the override so enforcement re-arms")
+	}
+
+	// Disabling enforcement lifts the block.
+	if err := m.SetTrafficConfig("", 200, 1, false); err != nil {
+		t.Fatalf("SetTrafficConfig: %v", err)
+	}
+	if m.QuotaBlocked() {
+		t.Fatal("disabling enforcement should lift the block")
+	}
+
+	// Resetting the counters unlocks the period as well.
+	if err := m.SetTrafficConfig("", 200, 1, true); err != nil {
+		t.Fatalf("SetTrafficConfig: %v", err)
+	}
+	store.Update(func(s *state.State) { s.QuotaBlockedPeriod = period })
+	m.ResetTraffic()
+	if m.QuotaBlocked() {
+		t.Fatal("ResetTraffic should lift the block")
 	}
 }

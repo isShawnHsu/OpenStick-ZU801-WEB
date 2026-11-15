@@ -463,6 +463,9 @@ func (m *Manager) ConnectAPN(ctx context.Context, profileID string) error {
 	if m.Config().Modem.FlightMode {
 		return fmt.Errorf("飞行模式已开启，请先退出飞行模式")
 	}
+	if m.QuotaBlocked() {
+		return fmt.Errorf("本账期流量已达配额上限，蜂窝连接已被封顶；请先在「流量统计」里解除封顶或调高配额")
+	}
 	cfg := m.Config()
 	var prof *config.APNProfile
 	if profileID != "" {
@@ -903,7 +906,9 @@ func (m *Manager) SetSIMPin(ctx context.Context, kind, pin, puk string) error {
 	//   1.26+          ：`-m N --sim-pin=PIN`
 	// 先试旧写法，只有报“语法不认识”时才回退，避免一次输入白白消耗两次 PIN 重试。
 	simIdx := "0"
+	var before *parse.ModemInfo
 	if info, ierr := m.modemInfo(ctx, idx); ierr == nil {
+		before = info
 		if v := simIndexFromPath(info.SimPath); v != "" {
 			simIdx = v
 		}
@@ -930,17 +935,106 @@ func (m *Manager) SetSIMPin(ctx context.Context, kind, pin, puk string) error {
 		if err != nil {
 			return fmt.Errorf("PUK 解锁失败: %w", err)
 		}
+		m.waitSIMUnlocked(ctx, idx, 15*time.Second)
 		return nil
+	}
+
+	// 模块刚复位或 ModemManager 刚重启时，SIM 对象还在、但还不能用；
+	// 这时候发 PIN 会本地失败，一次都到不了卡上。先等它就绪。
+	if err := m.waitSIMReady(ctx, idx, simIdx, 10*time.Second); err != nil {
+		return err
 	}
 
 	err = run(
 		[]string{"-m", idx, "--sim", simIdx, "--pin", pin},
 		[]string{"-m", idx, "--sim-pin=" + pin},
 	)
+	if err != nil && simNotReadyError(err) {
+		// 只有“剩余次数没变”才重试：这证明 PIN 根本没送到卡上，
+		// 重发一次不会额外消耗一次机会。
+		if after, ierr := m.modemInfo(ctx, idx); ierr == nil && before != nil &&
+			before.RetriesFor("sim-pin") == after.RetriesFor("sim-pin") {
+			if werr := m.waitSIMReady(ctx, idx, simIdx, 8*time.Second); werr == nil {
+				err = run(
+					[]string{"-m", idx, "--sim", simIdx, "--pin", pin},
+					[]string{"-m", idx, "--sim-pin=" + pin},
+				)
+			}
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("PIN 解锁失败: %w", err)
 	}
+	// PIN verification takes a second or two; wait for ModemManager to report
+	// the new state so the page the UI renders right after submitting already
+	// shows the SIM as unlocked instead of looking like nothing happened.
+	m.waitSIMUnlocked(ctx, idx, 15*time.Second)
 	return nil
+}
+
+// waitSIMUnlocked blocks until the modem leaves the locked state or timeout
+// expires. It never fails the request: the PIN was already delivered.
+func (m *Manager) waitSIMUnlocked(ctx context.Context, idx string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		if info, err := m.modemInfo(ctx, idx); err == nil && !simLocked(info) {
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		if !sleepCtx(ctx, time.Second) {
+			return
+		}
+	}
+}
+
+// simLocked reports whether the modem still waits for a blocking SIM unlock.
+func simLocked(info *parse.ModemInfo) bool {
+	if info == nil {
+		return false
+	}
+	if strings.EqualFold(info.State, "locked") {
+		return true
+	}
+	lock := strings.ToLower(strings.TrimSpace(info.UnlockRequired))
+	if lock == "" || lock == "none" {
+		return false
+	}
+	return !parse.IsNonBlockingUnlock(lock)
+}
+
+// waitSIMReady waits until ModemManager can address the SIM object. A modem
+// reset or a ModemManager restart leaves the object in place but unusable for a
+// few seconds, and a PIN sent during that window fails without reaching the card.
+func (m *Manager) waitSIMReady(ctx context.Context, idx, simIdx string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := m.mmcli(ctx, 6*time.Second, "-m", idx, "--sim", simIdx); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("SIM 还没就绪（模块刚复位或 ModemManager 刚重启时常见），请等几秒再试")
+		}
+		if !sleepCtx(ctx, time.Second) {
+			return ctx.Err()
+		}
+	}
+}
+
+// simNotReadyError reports failures that happen before the SIM can be used, so
+// the PIN cannot have been verified by the card and a retry is free.
+func simNotReadyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, p := range []string{"couldn't find sim", "couldn't find the sim", "no sim was specified", "uimuninitialized"} {
+		if strings.Contains(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // isMMCLIOptionError reports whether mmcli failed because it did not understand

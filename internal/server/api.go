@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -11,6 +12,15 @@ import (
 	"msm8916d/internal/config"
 	"msm8916d/internal/svc"
 )
+
+// pinDigits matches digit runs long enough to be a PIN or PUK. Journal entries
+// are masked with it so an unlock failure can be diagnosed without storing the
+// secret.
+var pinDigits = regexp.MustCompile(`\d{4,}`)
+
+func redactDigits(s string) string {
+	return pinDigits.ReplaceAllString(s, "****")
+}
 
 type dashboard struct {
 	Time     int64             `json:"time"`
@@ -214,6 +224,9 @@ func (s *Server) apiSIMPin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.m.SetSIMPin(r.Context(), body.Kind, body.Pin, body.PUK); err != nil {
+		// Log the reason so a failed unlock can be diagnosed from the journal,
+		// with any digit run masked in case the tool echoed the value back.
+		s.m.Logger().Printf("SIM 解锁失败: %s", redactDigits(err.Error()))
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -694,6 +707,12 @@ func (s *Server) apiTrafficSave(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiTrafficReset(w http.ResponseWriter, r *http.Request) {
 	s.m.ResetTraffic()
+	ok(w, s.m.TrafficStats(r.Context()))
+}
+
+// apiTrafficUnblock lifts the quota cap for the current billing period.
+func (s *Server) apiTrafficUnblock(w http.ResponseWriter, r *http.Request) {
+	s.m.UnblockQuota()
 	ok(w, s.m.TrafficStats(r.Context()))
 }
 

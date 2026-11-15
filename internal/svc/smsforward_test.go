@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -236,5 +237,29 @@ func TestSMSForwardTargetNormalize(t *testing.T) {
 	}
 	if ding.Name != "钉钉" {
 		t.Errorf("name = %q", ding.Name)
+	}
+}
+
+// TestSMSForwardExpectedFailure keeps the minute-by-minute poller from filling
+// the journal while the SIM is locked or the modem is off.
+func TestSMSForwardExpectedFailure(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{"读取短信列表失败: mmcli -m 0 --messaging-list-sms -J: error: modem not enabled yet", true},
+		{"未检测到蜂窝模块: error: couldn't find modem", true},
+		{"未检测到蜂窝模块: error: couldn't find the ModemManager process in the bus", true},
+		{"mmcli: error: modem is locked", true},
+		{"读取短信列表失败: mmcli: error: some unexpected failure", false},
+		{"webhook 返回 500", false},
+	}
+	for _, c := range cases {
+		if got := smsForwardExpectedFailure(errors.New(c.msg)); got != c.want {
+			t.Errorf("smsForwardExpectedFailure(%q) = %v, want %v", c.msg, got, c.want)
+		}
+	}
+	if smsForwardExpectedFailure(nil) {
+		t.Error("nil error must not be treated as an expected failure")
 	}
 }

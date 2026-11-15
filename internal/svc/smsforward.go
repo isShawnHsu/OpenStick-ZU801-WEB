@@ -25,7 +25,29 @@ const (
 	smsForwardKeep        = 500
 	smsForwardMaxAge      = 30 * 24 * time.Hour
 	smsForwardLogInterval = 5 * time.Minute
+	// smsForwardQuietInterval is used for failures that are expected while the
+	// SIM is locked or the modem is off. The poller retries every minute, so a
+	// five minute log line would fill the journal with the same message.
+	smsForwardQuietInterval = 30 * time.Minute
 )
+
+// smsForwardExpectedFailure reports whether an error is the normal "modem/SIM
+// not ready yet" state rather than a real problem worth logging often.
+func smsForwardExpectedFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"not enabled", "couldn't find modem", "no modems", "in the bus",
+		"sim is locked", "sim not ready", "not ready", "locked",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
 
 // smsForwardClient bounds every webhook request so a dead endpoint cannot hang
 // the polling loop.
@@ -189,7 +211,11 @@ func (m *Manager) forwardPendingSMS(ctx context.Context) {
 // so the log is not flooded every interval.
 func (m *Manager) logSMSForwardError(err error) {
 	now := time.Now()
-	if m.smsForwardLastErr == err.Error() && now.Sub(m.smsForwardErrAt) < smsForwardLogInterval {
+	interval := smsForwardLogInterval
+	if smsForwardExpectedFailure(err) {
+		interval = smsForwardQuietInterval
+	}
+	if m.smsForwardLastErr == err.Error() && now.Sub(m.smsForwardErrAt) < interval {
 		return
 	}
 	m.smsForwardLastErr = err.Error()

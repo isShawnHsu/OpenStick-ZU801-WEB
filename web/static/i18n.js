@@ -394,6 +394,10 @@ var I18N = {
     'traffic.current': '当前',
     'traffic.noHistory': '暂无历史记录',
     'traffic.dailyNote': '按本地时间自然日统计，没有流量的日期也会列出。',
+    'traffic.blockedHint': '本账期流量已达配额上限，蜂窝连接已封顶：手动重连也会在几秒内被断开。',
+    'traffic.unblock': '解除封顶',
+    'traffic.unblockConfirm': '解除封顶后，本账期内将不再按配额断网，可能产生额外流量费用。确定继续吗？',
+    'traffic.unblockedHint': '本账期已手动解除封顶：用量仍超过配额，但不会自动断网，下个账期恢复。',
 
     'system.title': '系统设置',
     'system.info': '设备信息',
@@ -852,6 +856,10 @@ var I18N = {
     'traffic.current': 'Current',
     'traffic.noHistory': 'No history yet',
     'traffic.dailyNote': 'Grouped by local calendar day; days without traffic are listed as zero.',
+    'traffic.blockedHint': 'This period has used up its quota: the cellular link is capped and reconnects are dropped within seconds.',
+    'traffic.unblock': 'Lift cap',
+    'traffic.unblockConfirm': 'Lifting the cap disables quota enforcement for the rest of this period and may cost extra data fees. Continue?',
+    'traffic.unblockedHint': 'The cap is lifted for this period: usage is still above the quota, but the link is not cut until the next period.',
 
     'system.title': 'System',
     'system.info': 'Device information',

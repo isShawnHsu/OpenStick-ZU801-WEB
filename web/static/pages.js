@@ -22,6 +22,15 @@ function kv(label, value, kind) {
   return '<div class="kv"><span class="k">' + esc(label) + '</span><span class="v ' + (kind || '') + '">' + value + '</span></div>';
 }
 
+// blockingUnlock reports whether an "unlock required" value actually stops the
+// modem. PIN2/PUK2 only guard fixed dialing and stay reported after PIN1 is
+// unlocked, so showing them as a warning makes a working SIM look locked.
+function blockingUnlock(u) {
+  u = String(u || '').toLowerCase().trim();
+  if (!u || u === 'none') return false;
+  return u !== 'sim-pin2' && u !== 'sim-puk2';
+}
+
 function field(label, inner, hint) {
   return '<label class="field"><span>' + esc(label) + '</span>' + inner +
     (hint ? '<small class="muted">' + esc(hint) + '</small>' : '') + '</label>';
@@ -141,7 +150,7 @@ function dashboardView(d) {
     ? kv('IMSI', esc(shortMask(get(modem, 'sim.imsi', ''), 8))) +
       kv('ICCID', esc(shortMask(get(modem, 'sim.iccid', ''), 10))) +
       kv(t('dash.operator'), esc(get(modem, 'sim.operator_name', '-') || '-')) +
-      (info.unlock_required ? '<div class="note warn">' + esc(t('dash.unlock')) + ': ' + esc(info.unlock_required) + '</div>' : '') +
+      (blockingUnlock(info.unlock_required) ? '<div class="note warn">' + esc(t('dash.unlock')) + ': ' + esc(info.unlock_required) + '</div>' : '') +
       (info.unlock_note ? '<div class="note small">' + esc(t('dash.pin2Note')) + '</div>' : '')
     : '<div class="note warn">' + esc(t('dash.noSim')) + '</div>' +
       (bridge.active ? '<p class="small muted">' + esc(t('bridge.active')) + '</p>' : '');
@@ -182,6 +191,7 @@ function dashboardView(d) {
     kv(t('traffic.tx'), esc(bytes(tr.tx || 0))) +
     kv(t('dash.now'), esc(rate(tr.rx_rate || 0)) + ' / ' + esc(rate(tr.tx_rate || 0))) +
     (quota > 0 ? kv(t('common.quota'), '<span class="meter-val">' + bar(quotaPct, quotaPct >= 90 ? 'bad' : quotaPct >= 70 ? 'warn' : '') + '<span class="small">' + esc(pct(quotaPct)) + '</span></span>') : '') +
+    (tr.quota_blocked ? '<div class="note warn">' + esc(t('traffic.blockedHint')) + ' <a class="btn ghost small" href="#/traffic">' + esc(t('traffic.unblock')) + '</a></div>' : '') +
     '<div class="btn-row"><a class="btn ghost" href="#/traffic">' + esc(t('common.details')) + '</a></div>';
 
   return pageHead(t('dash.title'), sys.hostname || '', '<button class="ghost" data-action="reload">' + esc(t('dash.refresh')) + '</button>') +
@@ -291,7 +301,8 @@ function cellularView(r) {
   var simBody = st.sim_present
     ? kv('IMSI', esc(get(st, 'sim.imsi', '-') || '-')) + kv('ICCID', esc(get(st, 'sim.iccid', '-') || '-')) +
       kv(t('cell.operator'), esc(get(st, 'sim.operator_name', '-') || '-')) +
-      (get(st, 'info.unlock_required', '') ? '<div class="note warn">' + esc(t('dash.unlock')) + ': ' + esc(get(st, 'info.unlock_required', '')) + '</div>' : '') +
+      (blockingUnlock(get(st, 'info.unlock_required', ''))
+        ? '<div class="note warn">' + esc(t('dash.unlock')) + ': ' + esc(get(st, 'info.unlock_required', '')) + '</div>' : '') +
       (get(st, 'info.unlock_note', '') ? '<div class="note small">' + esc(t('dash.pin2Note')) + '</div>' : '')
     : '<div class="note warn">' + esc(t('cell.noSim')) + '</div>';
 
@@ -659,6 +670,13 @@ function trafficView(st) {
 
   return pageHead(t('traffic.title'), st.period || '',
     '<button class="ghost" data-action="traffic-reset">' + esc(t('traffic.reset')) + '</button>') +
+    (st.quota_blocked
+      ? '<div class="note warn">' + esc(t('traffic.blockedHint')) +
+        ' <button class="ghost small" type="button" data-action="quota-unblock">' + esc(t('traffic.unblock')) + '</button></div>'
+      : '') +
+    (st.quota_unblocked
+      ? '<div class="note">' + esc(t('traffic.unblockedHint')) + '</div>'
+      : '') +
     card(t('traffic.title'),
       '<div class="grid two">' +
       kv(t('traffic.total'), '<strong>' + esc(bytes(st.total || 0)) + '</strong>') +

@@ -692,6 +692,13 @@ async function handleAction(el) {
         await refresh();
       });
       return;
+    case 'quota-unblock':
+      await act(el, async function () {
+        if (!confirmBox(t('traffic.unblockConfirm'))) return;
+        await api('/api/traffic/unblock', { method: 'POST', body: {} });
+        await refresh();
+      });
+      return;
     case 'logs-load':
       await act(el, async function () {
         var unitEl = document.getElementById('main').querySelector('[name="log_unit"]');
@@ -934,10 +941,17 @@ async function handleSubmit(ev) {
     }
     if (kind === 'pin') {
       await act(btn, async function () {
-        var isPuk = !!d.puk;
+        // Prefer PIN when both boxes have content: the PUK box is only for the
+        // locked-out case, and a stray value there must not reroute the call.
+        var isPuk = !!String(d.puk || '').trim() && !String(d.pin || '').trim();
         await api('/api/modem/pin', { method: 'POST', body: { kind: isPuk ? 'puk' : 'pin', pin: d.pin, puk: d.puk || '' } });
         toast(t('common.saved'));
         await refresh();
+        // The cellular page has no background refresh, and the modem may need a
+        // moment to settle (registration right after unlock). Refresh twice more
+        // so the lock banner disappears without a manual reload.
+        setTimeout(function () { refresh(); }, 3000);
+        setTimeout(function () { refresh(); }, 8000);
       });
       return;
     }

@@ -124,6 +124,7 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/traffic", s.protect(s.apiTraffic))
 	mux.Handle("POST /api/traffic", s.protect(s.apiTrafficSave))
 	mux.Handle("POST /api/traffic/reset", s.protect(s.apiTrafficReset))
+	mux.Handle("POST /api/traffic/unblock", s.protect(s.apiTrafficUnblock))
 	mux.Handle("POST /api/traffic/lifetime", s.protect(s.apiTrafficLifetime))
 
 	mux.Handle("GET /api/system", s.protect(s.apiSystem))

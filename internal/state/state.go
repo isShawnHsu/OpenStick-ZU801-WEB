@@ -23,7 +23,16 @@ type State struct {
 	SMSForward SMSForwardState        `json:"sms_forward"`
 	Clients    map[string]ClientEntry `json:"clients"`
 	Blocked    []string               `json:"blocked_macs"`
-	// QuotaDisconnectedPeriod prevents repeatedly disconnecting within one period.
+	// QuotaBlockedPeriod marks the billing period whose quota is exhausted.
+	// While it matches the current period the cellular connection stays blocked,
+	// so a manual reconnect is torn down again instead of silently running on.
+	QuotaBlockedPeriod string `json:"quota_blocked_period,omitempty"`
+	// QuotaUnblockedPeriod records a period where the user explicitly lifted the
+	// cap. Enforcement stays off for that period even though usage is still above
+	// the quota, and it re-arms automatically on the next period.
+	QuotaUnblockedPeriod string `json:"quota_unblocked_period,omitempty"`
+	// QuotaDisconnectedPeriod is the legacy one-shot marker written by older
+	// builds; it is migrated into QuotaBlockedPeriod when the state is loaded.
 	QuotaDisconnectedPeriod string `json:"quota_disconnected_period,omitempty"`
 	UpdatedAt               int64  `json:"updated_at"`
 }
@@ -135,6 +144,12 @@ func Load(path string) (*State, error) {
 	if st.Traffic.History == nil {
 		st.Traffic.History = []TrafficMonth{}
 	}
+	// Older builds only remembered that they had disconnected once; treat that
+	// as an active block so the quota keeps being enforced after the upgrade.
+	if st.QuotaBlockedPeriod == "" && st.QuotaDisconnectedPeriod != "" {
+		st.QuotaBlockedPeriod = st.QuotaDisconnectedPeriod
+	}
+	st.QuotaDisconnectedPeriod = ""
 	return st, nil
 }
 

@@ -58,6 +58,26 @@ func IsNonBlockingUnlock(lock string) bool {
 	return false
 }
 
+// RetriesFor returns the remaining attempts reported for a lock such as
+// "sim-pin" in the "unlock retries" line, or -1 when it is not reported.
+// It lets callers tell "the card rejected the PIN" (counter dropped) apart from
+// "the command never reached the card" (counter unchanged).
+func (mi *ModemInfo) RetriesFor(lock string) int {
+	if mi == nil || mi.UnlockRetries == "" {
+		return -1
+	}
+	re := regexp.MustCompile(regexp.QuoteMeta(lock) + `\s*\((\d+)\)`)
+	m := re.FindStringSubmatch(mi.UnlockRetries)
+	if len(m) != 2 {
+		return -1
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
 // IsPSOnlyUeMode reports whether the modem is configured for packet-switched
 // service only. In that mode the CS domain never attaches, so SMS cannot be
 // delivered over LTE (which needs CS fallback / SGs or IMS).

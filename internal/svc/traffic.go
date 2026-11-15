@@ -32,7 +32,12 @@ type TrafficStats struct {
 	QuotaPercent float64 `json:"quota_percent"`
 	ResetDay     int     `json:"reset_day"`
 	EnforceQuota bool    `json:"enforce_quota"`
-	LastSample   int64   `json:"last_sample"`
+	// QuotaBlocked reports that the current period is capped: the cellular
+	// connection is kept down until the period rolls over or the cap is lifted.
+	QuotaBlocked bool  `json:"quota_blocked"`
+	// QuotaUnblocked reports that the cap was lifted manually for this period.
+	QuotaUnblocked bool  `json:"quota_unblocked"`
+	LastSample     int64 `json:"last_sample"`
 	// Months lists the current billing period first, then archived periods.
 	Months []TrafficMonthStat `json:"months"`
 	// Days is the per-day breakdown of the current period, newest first.
@@ -129,18 +134,145 @@ func (m *Manager) SampleTraffic(ctx context.Context) error {
 	})
 
 	if cfg.Data.QuotaBytes > 0 && cfg.Data.EnforceQuota {
-		snap := m.store.Snapshot()
-		total := snap.Traffic.RX + snap.Traffic.TX
-		if total >= cfg.Data.QuotaBytes && snap.QuotaDisconnectedPeriod != period {
-			if err := m.DisconnectAPN(ctx); err == nil {
-				m.log.Printf("流量配额已用尽，已断开蜂窝连接")
-				m.store.Update(func(s *state.State) { s.QuotaDisconnectedPeriod = period })
-			} else {
-				m.log.Printf("流量配额已用尽，但断开蜂窝连接失败: %v", err)
-			}
-		}
+		m.enforceQuota(ctx, cfg, period)
 	}
 	return nil
+}
+
+// enforceQuota keeps the cellular connection capped once the billing period's
+// quota is used up.
+//
+// The block is a persisted state, not a one-shot event: a manual reconnect is
+// torn down again on the next sample and ConnectAPN refuses to dial at all,
+// otherwise the cap would only last until the next click. The block is cleared
+// by a new billing period, a traffic reset, raising the quota or an explicit
+// unblock from the UI.
+func (m *Manager) enforceQuota(ctx context.Context, cfg *config.Config, period string) {
+	snap := m.store.Snapshot()
+	total := snap.Traffic.RX + snap.Traffic.TX
+	blocked := snap.QuotaBlockedPeriod == period
+
+	// An explicit "解除封顶" wins for the rest of the period, otherwise clearing
+	// the flag would only last until the next 10 second sample.
+	if snap.QuotaUnblockedPeriod == period {
+		if blocked {
+			m.store.Update(func(s *state.State) { s.QuotaBlockedPeriod = "" })
+		}
+		return
+	}
+
+	if cfg.Data.QuotaBytes <= 0 || !cfg.Data.EnforceQuota || total < cfg.Data.QuotaBytes {
+		if blocked {
+			m.clearQuotaBlock()
+			m.log.Printf("流量回到配额以内，已解除封顶")
+		}
+		return
+	}
+
+	if !blocked {
+		m.store.Update(func(s *state.State) { s.QuotaBlockedPeriod = period })
+		m.log.Printf("流量已达配额（%.1f MB / %.1f MB），已封顶并断开蜂窝连接",
+			float64(total)/1048576, float64(cfg.Data.QuotaBytes)/1048576)
+	}
+
+	// While the cap is active nothing should dial the link: NetworkManager
+	// autoconnect would otherwise connect and get torn down again in a loop,
+	// and every attempt spends a minute of radio time.
+	m.keepQuotaAutoconnectOff(ctx)
+
+	// Something (NetworkManager autoconnect, a manual click, a service restart)
+	// may dial the link back up; kick it down again, but throttle so a broken
+	// modem cannot turn this into a busy loop.
+	m.trafficMu.Lock()
+	last := m.traffic.lastQuotaKick
+	if !last.IsZero() && time.Since(last) < 30*time.Second {
+		m.trafficMu.Unlock()
+		return
+	}
+	m.traffic.lastQuotaKick = time.Now()
+	m.trafficMu.Unlock()
+
+	if !m.CellularDataActive(ctx) {
+		return
+	}
+	if err := m.DisconnectAPN(ctx); err != nil {
+		m.log.Printf("配额封顶：断开蜂窝连接失败: %v", err)
+		return
+	}
+	m.log.Printf("配额封顶：蜂窝连接再次被断开")
+}
+
+// QuotaBlocked reports whether the current billing period is capped.
+func (m *Manager) QuotaBlocked() bool {
+	cfg := m.Config()
+	if cfg.Data.QuotaBytes <= 0 || !cfg.Data.EnforceQuota {
+		return false
+	}
+	period := billingPeriod(time.Now(), cfg.Data.ResetDay)
+	snap := m.store.Snapshot()
+	if snap.QuotaUnblockedPeriod == period {
+		return false
+	}
+	return snap.QuotaBlockedPeriod == period
+}
+
+// quotaExceeded reports whether this period's usage has reached the quota.
+func (m *Manager) quotaExceeded() bool {
+	cfg := m.Config()
+	if cfg.Data.QuotaBytes <= 0 || !cfg.Data.EnforceQuota {
+		return false
+	}
+	snap := m.store.Snapshot()
+	return snap.Traffic.RX+snap.Traffic.TX >= cfg.Data.QuotaBytes
+}
+
+// UnblockQuota lifts the cap for the current billing period as an explicit user
+// choice. It also records an override so the next sample does not re-block while
+// usage is still above the quota; the override expires with the period.
+func (m *Manager) UnblockQuota() {
+	period := billingPeriod(time.Now(), m.Config().Data.ResetDay)
+	m.store.Update(func(s *state.State) {
+		s.QuotaBlockedPeriod = ""
+		s.QuotaUnblockedPeriod = period
+	})
+	m.resetQuotaKick()
+}
+
+// clearQuotaBlock removes the block and any override, used when the quota is
+// raised, enforcement is turned off or the counters are reset.
+func (m *Manager) clearQuotaBlock() {
+	m.store.Update(func(s *state.State) {
+		s.QuotaBlockedPeriod = ""
+		s.QuotaUnblockedPeriod = ""
+	})
+	m.resetQuotaKick()
+}
+
+func (m *Manager) resetQuotaKick() {
+	m.trafficMu.Lock()
+	m.traffic.lastQuotaKick = time.Time{}
+	m.traffic.quotaAutoconnectOff = false
+	m.trafficMu.Unlock()
+}
+
+// keepQuotaAutoconnectOff disables NetworkManager autoconnect once per process
+// while the quota cap is active.
+func (m *Manager) keepQuotaAutoconnectOff(ctx context.Context) {
+	m.trafficMu.Lock()
+	done := m.traffic.quotaAutoconnectOff
+	m.traffic.quotaAutoconnectOff = true
+	m.trafficMu.Unlock()
+	if done || !m.Available("nmcli") {
+		return
+	}
+	name := m.Config().Modem.ConnectionName
+	if name == "" {
+		name = modemNMConnection
+	}
+	if _, err := m.Run(ctx, 10*time.Second, "nmcli", "connection", "modify", name,
+		"connection.autoconnect", "no"); err != nil {
+		m.log.Printf("配额封顶：关闭 %s 自动重连失败: %v", name, err)
+	}
 }
 
 // TrafficStats returns the current accounting view.
@@ -173,6 +305,8 @@ func (m *Manager) TrafficStats(ctx context.Context) *TrafficStats {
 	if st.Period == "" {
 		st.Period = billingPeriod(now, cfg.Data.ResetDay)
 	}
+	st.QuotaBlocked = snap.QuotaBlockedPeriod != "" && snap.QuotaBlockedPeriod == st.Period
+	st.QuotaUnblocked = snap.QuotaUnblockedPeriod != "" && snap.QuotaUnblockedPeriod == st.Period
 	st.Months = trafficMonthStats(snap.Traffic, st.Period)
 	st.Days = trafficDayStats(snap.Traffic.Days, now, cfg.Data.ResetDay)
 	return st
@@ -191,6 +325,8 @@ func (m *Manager) ResetTraffic() {
 		s.Traffic.TX = 0
 		s.Traffic.Days = map[string]state.TrafficBucket{}
 		s.Traffic.Period = period
+		s.QuotaBlockedPeriod = ""
+		s.QuotaUnblockedPeriod = ""
 	})
 	m.trafficMu.Lock()
 	m.traffic.lastRX = 0
@@ -199,6 +335,8 @@ func (m *Manager) ResetTraffic() {
 	m.traffic.src = ""
 	m.traffic.rxRate = 0
 	m.traffic.txRate = 0
+	m.traffic.lastQuotaKick = time.Time{}
+	m.traffic.quotaAutoconnectOff = false
 	m.trafficMu.Unlock()
 }
 
@@ -209,6 +347,8 @@ func (m *Manager) ResetLifetime() {
 			Period: billingPeriod(time.Now(), m.Config().Data.ResetDay),
 			Days:   map[string]state.TrafficBucket{},
 		}
+		s.QuotaBlockedPeriod = ""
+		s.QuotaUnblockedPeriod = ""
 	})
 	m.trafficMu.Lock()
 	m.traffic = trafficRuntime{}
@@ -217,7 +357,7 @@ func (m *Manager) ResetLifetime() {
 
 // SetTrafficConfig persists accounting and quota settings.
 func (m *Manager) SetTrafficConfig(iface string, quota int64, resetDay int, enforce bool) error {
-	return m.Update(func(c *config.Config) error {
+	if err := m.Update(func(c *config.Config) error {
 		if strings.TrimSpace(iface) != "" {
 			c.Data.Interface = strings.TrimSpace(iface)
 		}
@@ -225,7 +365,16 @@ func (m *Manager) SetTrafficConfig(iface string, quota int64, resetDay int, enfo
 		c.Data.ResetDay = resetDay
 		c.Data.EnforceQuota = enforce
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	// Raising the quota, turning enforcement off or switching the reset day can
+	// all lift an existing block; make that take effect immediately instead of
+	// waiting for the next sample to clear it.
+	if !m.quotaExceeded() {
+		m.clearQuotaBlock()
+	}
+	return nil
 }
 
 // readTrafficCounters returns byte counters for the cellular data path.

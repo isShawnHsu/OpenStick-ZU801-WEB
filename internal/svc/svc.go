@@ -112,6 +112,12 @@ type trafficRuntime struct {
 	// only meaningful while the source stays the same.
 	src      string
 	lastSave time.Time
+	// lastQuotaKick throttles re-disconnecting a capped connection so a caller
+	// that keeps dialing cannot turn the quota block into a busy loop.
+	lastQuotaKick time.Time
+	// quotaAutoconnectOff records that NetworkManager autoconnect was disabled
+	// because the quota is exhausted; it is cleared when the cap is lifted.
+	quotaAutoconnectOff bool
 }
 
 // New creates a Manager. The store may be nil, in which case a memory-only

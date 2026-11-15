@@ -447,8 +447,14 @@ LTE 上收发短信需要 **CS 域（SGs）或 IMS**。如果模块/卡是纯数
   - “重置本账期”只清当前账期和每日明细，月度历史保留；
   - “重置累计流量”会连同历史一起清除。
 - 可设置流量配额并在超限时断网（`data.enforce_quota`）。
+  - 超限后进入**封顶状态**（`quota_blocked_period` 记录被封锁的账期），不是断一次就算了：
+    手动重连会被再次断开，网页上的“开启流量”也会直接拒绝并提示。
+  - 解除方式：流量页的**“解除封顶”**按钮、调高配额、关闭“达到配额后自动断网”、
+    重置本账期，或等到下一个账期。
+  - “解除封顶”会记下 `quota_unblocked_period`：本账期内即使仍超配额也不再断网，
+    下个账期自动恢复执行。
 
-> **计数是怎么来的**：每 60 秒读一次 `iptables -t mangle` 里的两条规则
+> **计数是怎么来的**：每 10 秒读一次 `iptables -t mangle` 里的两条规则
 > （`PREROUTING -i wwan0` 记下行、`POSTROUTING -o wwan0` 记上行，注释分别是
 > `msm8916d-rx` / `msm8916d-tx`），覆盖设备自身流量和热点/USB 转发流量。规则由程序自动创建。
 >
@@ -704,8 +710,26 @@ systemctl start msm8916d
 
 **流量统计为 0？**
 
-统计基于 `/sys/class/net/<iface>/statistics`。到“流量 → 统计网卡”确认选择的是实际上网
-网卡（蜂窝通常是 `wwan0`）。
+计数来自 `iptables -t mangle` 的两条规则（见“流量统计”一节），到“流量 → 统计网卡”
+确认选择的是实际上网网卡（蜂窝通常是 `wwan0`），再检查规则是否在：
+
+```sh
+iptables -t mangle -L PREROUTING -v -x -n | grep msm8916d-rx
+iptables -t mangle -L POSTROUTING -v -x -n | grep msm8916d-tx
+```
+
+**4G 一直拨不上、日志里每秒几十条重试？**
+
+检查 `autoconnect-retries` 是不是 `0`（无限重试）：NetworkManager 会在拨号失败后
+立刻重试，把模块的注册流程打断，表现为 `registration: idle` 且怎么重启模块都没用。
+
+```sh
+nmcli -f connection.autoconnect,connection.autoconnect-retries connection show modem
+nmcli connection modify modem connection.autoconnect-retries 5
+nmcli connection modify modem connection.autoconnect yes
+```
+
+改完后重启一次设备最稳（模块的 NAS 状态也会一起清掉）。
 
 **短信 / 模块不可用？**
 
@@ -804,7 +828,7 @@ Windows 下预览界面与 API：
 | GET/POST | `/api/bridge`、`/api/bridge/enable`、`/api/bridge/disable`、`/api/bridge/scan`、`/api/bridge/portal` | WiFi 转 USB 共享；`portal` 检测网页认证页面 |
 | GET/POST | `/api/clients`、`/api/clients/block`、`/api/clients/unblock`、`/api/clients/rename`、`/api/clients/forget` | 客户端 |
 | GET/POST | `/api/lan` | 局域网 / DHCP |
-| GET/POST | `/api/traffic`、`/api/traffic/reset`、`/api/traffic/lifetime` | 流量 |
+| GET/POST | `/api/traffic`、`/api/traffic/reset`、`/api/traffic/lifetime`、`/api/traffic/unblock` | 流量 |
 | GET/POST | `/api/system`、`/api/system/logs`、`/api/system/frpc-log`、`/api/system/leds`、`/api/system/led`、`/api/system/led-control`、`/api/system/password`、`/api/system/language`、`/api/system/admin-user`、`/api/system/session-hours`、`/api/system/reboot`、`/api/system/poweroff`、`/api/system/factory-reset`、`/api/system/ping`、`/api/system/dns` | 系统 |
 | GET | `/api/config` | 导出配置（不含密码散列） |
 
