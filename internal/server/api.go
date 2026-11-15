@@ -749,6 +749,15 @@ func (s *Server) apiFrpcLog(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]string{"path": path, "logs": text})
 }
 
+// apiFrpcRestart restarts the frpc unit from the system page.
+func (s *Server) apiFrpcRestart(w http.ResponseWriter, r *http.Request) {
+	if err := s.m.RestartFrpc(r.Context()); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, map[string]bool{"restarted": true, "active": s.m.FrpcActive(r.Context())})
+}
+
 func (s *Server) apiFrpcLogSave(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Path string `json:"path"`

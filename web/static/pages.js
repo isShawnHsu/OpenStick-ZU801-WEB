@@ -779,9 +779,11 @@ function systemView(sys, leds, ledControl) {
       field(t('system.lines'), '<input type="number" name="frpc_log_lines" min="10" max="2000" value="' + attr(frpcLogLines) + '">') +
       '</div>' +
       '<div class="btn-row"><button class="primary" type="submit">' + esc(t('system.saveAndRead')) + '</button>' +
-      '<button class="ghost" type="button" data-action="frpc-log-load">' + esc(t('system.loadLogs')) + '</button></div>' +
+      '<button class="ghost" type="button" data-action="frpc-log-load">' + esc(t('system.loadLogs')) + '</button>' +
+      '<button class="ghost" type="button" data-action="frpc-restart">' + esc(t('system.frpcRestart')) + '</button></div>' +
       '<p class="muted small">' + esc(t('system.frpcLogHint')) + '</p></form>' +
-      '<pre class="logs">' + esc(frpcLog || t('system.frpcLogEmpty')) + '</pre>') +
+      '<pre class="logs">' + esc(frpcLog || t('system.frpcLogEmpty')) + '</pre>',
+      pill(sys.frpc_active ? t('system.frpcRunning') : t('system.frpcStopped'), sys.frpc_active ? 'ok' : 'bad')) +
     card(t('system.leds'), ledState + ledControlForm + (ledRows
       ? '<div class="table-wrap"><table><thead><tr><th>' + esc(t('system.ledName')) + '</th><th>' + esc(t('system.trigger')) + '</th><th>' + esc(t('system.brightness')) + '</th><th class="row-actions">' + esc(t('common.actions')) + '</th></tr></thead><tbody>' + ledRows + '</tbody></table></div>'
       : '<p class="muted">' + esc(t('system.noLeds')) + '</p>')) +

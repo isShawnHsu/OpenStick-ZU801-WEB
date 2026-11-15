@@ -31,6 +31,8 @@ type SystemInfo struct {
 	LoadText    string `json:"load_text"`
 	UptimeText  string `json:"uptime_text"`
 	FrpcLogPath string `json:"frpc_log_path"`
+	// FrpcActive reports whether the frpc unit is currently running.
+	FrpcActive bool `json:"frpc_active"`
 }
 
 // SystemInfo collects a fresh snapshot with disk and build metadata.
@@ -44,6 +46,7 @@ func (m *Manager) SystemInfo(ctx context.Context) *SystemInfo {
 		LoadText:    fmt.Sprintf("%.2f / %.2f / %.2f", s.Load1, s.Load5, s.Load15),
 		UptimeText:  formatDuration(s.UptimeSec),
 		FrpcLogPath: m.Config().System.FrpcLogPath,
+		FrpcActive:  m.FrpcActive(ctx),
 	}
 	if res := m.runner.Run(ctx, 6*time.Second, "df", "-Pk", "/"); res.Err == nil {
 		if total, used, free, ok := sysinfo.ParseDF(res.Stdout); ok {
@@ -235,6 +238,37 @@ func (m *Manager) SetFrpcLogPath(path string) error {
 		c.System.FrpcLogPath = path
 		return nil
 	})
+}
+
+// FrpcActive reports whether the frpc unit is running.
+func (m *Manager) FrpcActive(ctx context.Context) bool {
+	if !m.Available("systemctl") {
+		return false
+	}
+	return strings.TrimSpace(m.RunTry(ctx, 5*time.Second, "systemctl", "is-active", "frpc")) == "active"
+}
+
+// RestartFrpc restarts the frpc unit and waits until it is running again, so the
+// page can show the result right away instead of a stale "inactive".
+func (m *Manager) RestartFrpc(ctx context.Context) error {
+	if !m.Available("systemctl") {
+		return fmt.Errorf("未找到 systemctl，无法重启 frpc")
+	}
+	if _, err := m.Run(ctx, 30*time.Second, "systemctl", "restart", "frpc"); err != nil {
+		return fmt.Errorf("重启 frpc 失败: %w", err)
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		if m.FrpcActive(ctx) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("frpc 已重启，但当前不是运行状态，请查看下方日志")
+		}
+		if !sleepCtx(ctx, 500*time.Millisecond) {
+			return ctx.Err()
+		}
+	}
 }
 
 // ReadLogFile returns the last lines of an absolute log file path, newest first.

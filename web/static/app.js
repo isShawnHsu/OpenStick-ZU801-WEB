@@ -734,6 +734,16 @@ async function handleAction(el) {
         await refresh();
       });
       return;
+    case 'frpc-restart':
+      await act(el, async function () {
+        if (!confirmBox(t('system.frpcRestartConfirm'))) return;
+        await api('/api/system/frpc/restart', { method: 'POST', body: {} });
+        toast(t('system.frpcRestarted'));
+        // Reload the log so a client that fails to start explains itself right away.
+        await readFrpcLog(state.cache.frpcLogLines || 200);
+        await refresh();
+      });
+      return;
     case 'led-edit': {
       var leds = state.cache.leds || [];
       var led = null;

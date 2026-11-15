@@ -131,6 +131,7 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/system/logs", s.protect(s.apiLogs))
 	mux.Handle("GET /api/system/frpc-log", s.protect(s.apiFrpcLog))
 	mux.Handle("POST /api/system/frpc-log", s.protect(s.apiFrpcLogSave))
+	mux.Handle("POST /api/system/frpc/restart", s.protect(s.apiFrpcRestart))
 	mux.Handle("GET /api/system/leds", s.protect(s.apiLEDs))
 	mux.Handle("POST /api/system/led", s.protect(s.apiLEDSet))
 	mux.Handle("GET /api/system/led-control", s.protect(s.apiLEDControl))
