@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"uz801d/internal/config"
-	"uz801d/internal/svc"
+	"msm8916d/internal/config"
+	"msm8916d/internal/svc"
 )
 
 type dashboard struct {

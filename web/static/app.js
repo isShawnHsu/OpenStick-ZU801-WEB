@@ -358,7 +358,7 @@ async function handleAction(el) {
     case 'toggle-lang': {
       var next = state.lang === 'zh' ? 'en' : 'zh';
       state.lang = next;
-      try { localStorage.setItem('uz801d_lang', next); } catch (e) {}
+      try { localStorage.setItem('msm8916d_lang', next); } catch (e) {}
       if (state.session && state.session.authenticated) {
         try { await api('/api/system/language', { method: 'POST', body: { language: next } }); } catch (e) { toast(e.message, 'bad'); }
         if (state.session) state.session.language = next;
@@ -813,7 +813,7 @@ async function saveBridgeForm() {
     upstream_password: d.upstream_password,
     upstream_security: d.upstream_security,
     upstream_hidden: !!c.upstream_hidden,
-    upstream_connection: c.upstream_connection || 'uz801d-upstream',
+    upstream_connection: c.upstream_connection || 'msm8916d-upstream',
     previous_ap_connection: c.previous_ap_connection || '',
     ap_interface: c.ap_interface || 'auto',
     channel: c.channel || 0,
@@ -854,7 +854,7 @@ async function handleSubmit(ev) {
         var sess = await api('/api/login', { method: 'POST', body: { username: d.username, password: d.password } });
         state.session = sess;
         state.csrf = sess.csrf || '';
-        state.lang = (function () { try { return localStorage.getItem('uz801d_lang') || sess.language || 'zh'; } catch (e) { return sess.language || 'zh'; } })();
+        state.lang = (function () { try { return localStorage.getItem('msm8916d_lang') || sess.language || 'zh'; } catch (e) { return sess.language || 'zh'; } })();
         state.last = null;
         toast(t('common.saved'));
         location.hash = '#/dashboard';
@@ -1157,7 +1157,7 @@ function bindEvents() {
 async function init() {
   bindEvents();
   var lang = null;
-  try { lang = localStorage.getItem('uz801d_lang'); } catch (e) {}
+  try { lang = localStorage.getItem('msm8916d_lang'); } catch (e) {}
   try {
     var sess = await api('/api/session');
     state.session = sess;

@@ -1,17 +1,17 @@
 [Unit]
-Description=MSM8916 Manager (uz801d)
+Description=MSM8916 Manager (msm8916d)
 Documentation=https://github.com/
 After=network-online.target NetworkManager.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/uz801d -config /etc/uz801d/config.json -state /var/lib/uz801d/state.json
+ExecStart=/usr/local/bin/msm8916d -config /etc/msm8916d/config.json -state /var/lib/msm8916d/state.json
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
-StateDirectory=uz801d
-RuntimeDirectory=uz801d
+StateDirectory=msm8916d
+RuntimeDirectory=msm8916d
 NoNewPrivileges=yes
 ProtectHome=yes
 ProtectKernelTunables=no

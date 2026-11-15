@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"uz801d/internal/config"
-	"uz801d/internal/state"
+	"msm8916d/internal/config"
+	"msm8916d/internal/state"
 )
 
 const (

@@ -5,11 +5,11 @@ const (
 	// Name is the human readable product name.
 	Name = "MSM8916 Manager"
 	// Slug is used for file names and service descriptions.
-	Slug = "uz801d"
+	Slug = "msm8916d"
 )
 
 var (
-	// Version is set with -ldflags "-X uz801d/internal/buildinfo.Version=..."
+	// Version is set with -ldflags "-X msm8916d/internal/buildinfo.Version=..."
 	Version = "dev"
 	// Commit is the git revision, if available.
 	Commit = "unknown"

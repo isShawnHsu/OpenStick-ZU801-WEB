@@ -12,25 +12,25 @@ import (
 	"sync"
 	"time"
 
-	"uz801d/internal/config"
-	"uz801d/internal/run"
-	"uz801d/internal/state"
+	"msm8916d/internal/config"
+	"msm8916d/internal/run"
+	"msm8916d/internal/state"
 )
 
 const (
 	// bridgeHostapdConf is written by the AP-STA relay, independent of the
 	// normal access point configuration so a failed bridge can be rolled back.
-	bridgeHostapdConf = "/etc/hostapd/uz801d-ap.conf"
-	bridgeDNSMasqConf = "/etc/dnsmasq.d/uz801d-ap.conf"
+	bridgeHostapdConf = "/etc/hostapd/msm8916d-ap.conf"
+	bridgeDNSMasqConf = "/etc/dnsmasq.d/msm8916d-ap.conf"
 	bridgeLeaseFile   = "/var/lib/misc/dnsmasq.leases"
-	bridgeAPUnit      = "uz801d-ap.service"
-	bridgeDHCPUnit    = "uz801d-dhcp.service"
-	bridgeHostapdPID  = "/run/uz801d-ap.pid"
-	bridgeDHCPPID     = "/run/uz801d-dhcp.pid"
-	nftBridgeTable    = "uz801d_bridge"
-	nftFilterTable    = "uz801d_filter"
-	apNMConnection    = "uz801d-ap"
-	modemNMConnection = "uz801d-modem"
+	bridgeAPUnit      = "msm8916d-ap.service"
+	bridgeDHCPUnit    = "msm8916d-dhcp.service"
+	bridgeHostapdPID  = "/run/msm8916d-ap.pid"
+	bridgeDHCPPID     = "/run/msm8916d-dhcp.pid"
+	nftBridgeTable    = "msm8916d_bridge"
+	nftFilterTable    = "msm8916d_filter"
+	apNMConnection    = "msm8916d-ap"
+	modemNMConnection = "msm8916d-modem"
 )
 
 // Options configures a Manager.
@@ -130,7 +130,7 @@ func New(cfg *config.Config, opts Options) (*Manager, error) {
 		opts.Runner = run.New()
 	}
 	if opts.Logger == nil {
-		opts.Logger = log.New(os.Stderr, "uz801d: ", log.LstdFlags)
+		opts.Logger = log.New(os.Stderr, "msm8916d: ", log.LstdFlags)
 	}
 	store := opts.Store
 	if store == nil {

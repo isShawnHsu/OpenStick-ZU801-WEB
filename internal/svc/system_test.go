@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"uz801d/internal/config"
+	"msm8916d/internal/config"
 )
 
 func newLogTestManager() *Manager {

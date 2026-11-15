@@ -1,4 +1,4 @@
-// Package config holds the persistent configuration of uz801d.
+// Package config holds the persistent configuration of msm8916d.
 package config
 
 import (
@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"uz801d/internal/netutil"
+	"msm8916d/internal/netutil"
 )
 
 const (
-	DefaultConfigPath = "/etc/uz801d/config.json"
-	DefaultStatePath  = "/var/lib/uz801d/state.json"
+	DefaultConfigPath = "/etc/msm8916d/config.json"
+	DefaultStatePath  = "/var/lib/msm8916d/state.json"
 )
 
 // Config is the complete persistent configuration.
@@ -75,7 +75,7 @@ type WifiConfig struct {
 	SSID              string       `json:"ssid"`
 	Password          string       `json:"password"`
 	Security          string       `json:"security"` // wpa2 | wpa3 | open
-	Band              string       `json:"band"`     // bg (UZ801 仅支持 2.4 GHz)
+	Band              string       `json:"band"`     // bg (MSM8916 仅支持 2.4 GHz)
 	Channel           int          `json:"channel"`  // 0 = auto
 	Hidden            bool         `json:"hidden"`
 	MaxClients        int          `json:"max_clients"`
@@ -201,14 +201,14 @@ func Default() *Config {
 			MaxClients:    10,
 			Country:       "CN",
 			HostapdConfig: "/etc/hostapd/hostapd.conf",
-			DNSMasqConfig: "/etc/dnsmasq.d/uz801d.conf",
+			DNSMasqConfig: "/etc/dnsmasq.d/msm8916d.conf",
 			ApplyOnStart:  true,
 			Bridge: BridgeConfig{
 				Mode:                "usb",
 				DownstreamInterface: "usb0",
 				Auto:                true,
 				UpstreamSecurity:    "wpa2",
-				UpstreamConnection:  "uz801d-upstream",
+				UpstreamConnection:  "msm8916d-upstream",
 				RouteMetric:         50,
 			},
 		},
@@ -342,7 +342,7 @@ func (c *Config) Normalize() {
 	if c.Wifi.Band == "" {
 		c.Wifi.Band = "bg"
 	}
-	// UZ801 hardware only supports 2.4 GHz. Old configs may still carry "a";
+	// MSM8916 hardware only supports 2.4 GHz. Old configs may still carry "a";
 	// coerce them instead of refusing to start.
 	if c.Wifi.Band != "bg" {
 		c.Wifi.Band = "bg"
@@ -360,7 +360,7 @@ func (c *Config) Normalize() {
 		c.Wifi.HostapdConfig = "/etc/hostapd/hostapd.conf"
 	}
 	if c.Wifi.DNSMasqConfig == "" {
-		c.Wifi.DNSMasqConfig = "/etc/dnsmasq.d/uz801d.conf"
+		c.Wifi.DNSMasqConfig = "/etc/dnsmasq.d/msm8916d.conf"
 	}
 	c.Wifi.Bridge.Mode = strings.ToLower(strings.TrimSpace(c.Wifi.Bridge.Mode))
 	if c.Wifi.Bridge.Mode == "" {
@@ -378,7 +378,7 @@ func (c *Config) Normalize() {
 		c.Wifi.Bridge.UpstreamSecurity = "wpa2"
 	}
 	if c.Wifi.Bridge.UpstreamConnection == "" {
-		c.Wifi.Bridge.UpstreamConnection = "uz801d-upstream"
+		c.Wifi.Bridge.UpstreamConnection = "msm8916d-upstream"
 	}
 	if c.Wifi.Bridge.RouteMetric == 0 {
 		c.Wifi.Bridge.RouteMetric = 50
@@ -537,7 +537,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("WiFi 加密方式无效")
 	}
 	if c.Wifi.Band != "bg" {
-		return fmt.Errorf("UZ801 仅支持 2.4 GHz 频段")
+		return fmt.Errorf("MSM8916 仅支持 2.4 GHz 频段")
 	}
 	if c.Wifi.Channel < 0 || c.Wifi.Channel > 14 {
 		return fmt.Errorf("2.4G 信道必须为 0-14（0 为自动）")

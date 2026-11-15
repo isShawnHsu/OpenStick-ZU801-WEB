@@ -1,0 +1,14 @@
+[Unit]
+Description=MSM8916 bridge DHCP/DNS (dnsmasq)
+After=msm8916d-ap.service
+Requires=msm8916d-ap.service
+# Started on demand by msm8916d; do not enable at boot.
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /var/lib/misc
+ExecStart=/usr/sbin/dnsmasq -k --conf-file=/etc/dnsmasq.d/msm8916d-ap.conf --pid-file=/run/msm8916d-dhcp.pid
+Restart=on-failure
+RestartSec=3
+KillMode=mixed
+NoNewPrivileges=yes

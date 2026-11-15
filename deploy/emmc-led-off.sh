@@ -7,10 +7,10 @@
 # risking a reboot loop.
 set -eu
 
-STATE_DIR=/var/lib/uz801d
+STATE_DIR=/var/lib/msm8916d
 ATTEMPT="$STATE_DIR/emmc-led-off.attempting"
 DISABLED="$STATE_DIR/emmc-led-off.disabled"
-LOG=/var/log/uz801d-emmc-led.log
+LOG=/var/log/msm8916d-emmc-led.log
 
 mkdir -p "$STATE_DIR"
 

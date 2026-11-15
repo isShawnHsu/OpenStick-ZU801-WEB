@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"uz801d/internal/auth"
-	"uz801d/internal/buildinfo"
-	"uz801d/internal/config"
-	"uz801d/internal/netutil"
-	"uz801d/internal/sysinfo"
+	"msm8916d/internal/auth"
+	"msm8916d/internal/buildinfo"
+	"msm8916d/internal/config"
+	"msm8916d/internal/netutil"
+	"msm8916d/internal/sysinfo"
 )
 
 // SystemInfo is the system page payload.

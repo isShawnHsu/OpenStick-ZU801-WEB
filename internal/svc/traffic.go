@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"uz801d/internal/config"
-	"uz801d/internal/state"
+	"msm8916d/internal/config"
+	"msm8916d/internal/state"
 )
 
 // trafficHistoryLimit caps archived billing periods kept in the state file.
@@ -261,8 +261,8 @@ func (m *Manager) readTrafficCounters(ctx context.Context, iface string) (rx, tx
 // Traffic accounting rules live in the mangle table so they never influence
 // forwarding decisions.
 const (
-	trafficRXComment = "uz801d-rx"
-	trafficTXComment = "uz801d-tx"
+	trafficRXComment = "msm8916d-rx"
+	trafficTXComment = "msm8916d-tx"
 )
 
 func (m *Manager) ensureTrafficRules(ctx context.Context, iface string) {

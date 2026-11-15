@@ -14,13 +14,13 @@ import (
 	"strings"
 	"time"
 
-	"uz801d/internal/auth"
-	"uz801d/internal/buildinfo"
-	"uz801d/internal/svc"
-	"uz801d/web"
+	"msm8916d/internal/auth"
+	"msm8916d/internal/buildinfo"
+	"msm8916d/internal/svc"
+	"msm8916d/web"
 )
 
-const sessionCookie = "uz801d_session"
+const sessionCookie = "msm8916d_session"
 
 type ctxKey int
 
@@ -163,7 +163,7 @@ func (s *Server) protect(h http.HandlerFunc) http.Handler {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			token := r.Header.Get("X-CSRF-Token")
 			if token == "" {
-				token = r.Header.Get("X-UZ801D-CSRF")
+				token = r.Header.Get("X-MSM8916D-CSRF")
 			}
 			if subtle.ConstantTimeCompare([]byte(token), []byte(sess.CSRF)) != 1 {
 				fail(w, http.StatusForbidden, "CSRF 校验失败，请刷新页面后重试")

@@ -90,8 +90,8 @@ func TestParseModem(t *testing.T) {
 	  "modem": {
 	    "generic": {
 	      "manufacturer": "QUALCOMM",
-	      "model": "UZ801",
-	      "revision": "UZ801V1",
+	      "model": "MSM8916",
+	      "revision": "MSM8916V1",
 	      "state": "connected",
 	      "signal-quality": {"value": 64},
 	      "access-technologies": ["lte"],
@@ -113,7 +113,7 @@ func TestParseModem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if info.Model != "UZ801" || info.State != "connected" {
+	if info.Model != "MSM8916" || info.State != "connected" {
 		t.Fatalf("unexpected info: %#v", info)
 	}
 	if info.SignalQuality != 64 {

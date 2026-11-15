@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"uz801d/internal/parse"
+	"msm8916d/internal/parse"
 )
 
 // NetInterface is one IPv4 interface summary.

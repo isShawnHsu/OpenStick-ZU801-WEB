@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"uz801d/internal/config"
-	"uz801d/internal/netutil"
-	"uz801d/internal/parse"
+	"msm8916d/internal/config"
+	"msm8916d/internal/netutil"
+	"msm8916d/internal/parse"
 )
 
 // BridgeCapability describes whether the radio can do managed + AP at once.
@@ -459,7 +459,7 @@ func (m *Manager) activeConnectionFor(ctx context.Context, iface string) string 
 func (m *Manager) connectUpstream(ctx context.Context, cfg *config.Config, upstream string) error {
 	name := cfg.Wifi.Bridge.UpstreamConnection
 	if name == "" {
-		name = "uz801d-upstream"
+		name = "msm8916d-upstream"
 	}
 	_, _ = m.Run(ctx, 12*time.Second, "nmcli", "connection", "delete", name)
 	if _, err := m.Run(ctx, 20*time.Second, "nmcli", "connection", "add", "type", "wifi",
@@ -559,12 +559,12 @@ func (m *Manager) startBridgeAP(ctx context.Context) error {
 	m.stopConflictingServices(ctx)
 	if m.unitExists(ctx, bridgeAPUnit) {
 		if err := m.serviceAction(ctx, "restart", bridgeAPUnit); err != nil {
-			return fmt.Errorf("启动 uz801d-ap.service 失败: %w", err)
+			return fmt.Errorf("启动 msm8916d-ap.service 失败: %w", err)
 		}
 		if m.unitExists(ctx, bridgeDHCPUnit) {
 			if err := m.serviceAction(ctx, "restart", bridgeDHCPUnit); err != nil {
 				_ = m.serviceAction(ctx, "stop", bridgeAPUnit)
-				return fmt.Errorf("启动 uz801d-dhcp.service 失败: %w", err)
+				return fmt.Errorf("启动 msm8916d-dhcp.service 失败: %w", err)
 			}
 		}
 		return nil
@@ -872,7 +872,7 @@ func (m *Manager) ProbePortal(ctx context.Context) PortalProbe {
 		if err != nil {
 			return PortalProbe{CheckedURL: rawURL, Error: err.Error()}
 		}
-		req.Header.Set("User-Agent", "uz801d-portal-probe")
+		req.Header.Set("User-Agent", "msm8916d-portal-probe")
 		resp, err := client.Do(req)
 		if err != nil {
 			return PortalProbe{CheckedURL: rawURL, Error: err.Error()}

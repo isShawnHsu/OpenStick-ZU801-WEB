@@ -6,20 +6,20 @@ import (
 	"testing"
 	"time"
 
-	"uz801d/internal/state"
+	"msm8916d/internal/state"
 )
 
 func TestParseIptablesCounters(t *testing.T) {
 	// Output of: iptables -t mangle -L PREROUTING -v -x -n
 	out := `Chain PREROUTING (policy ACCEPT 0 packets, 0 bytes)
     pkts      bytes target     prot opt in     out     source               destination
-      12     34567 RETURN     all  --  wwan0  *       0.0.0.0/0            0.0.0.0/0            /* uz801d-rx */
+      12     34567 RETURN     all  --  wwan0  *       0.0.0.0/0            0.0.0.0/0            /* msm8916d-rx */
        3      1234 ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0
 `
 	var got int64
 	var ok bool
 	for _, line := range strings.Split(out, "\n") {
-		if !strings.Contains(line, "uz801d-rx") {
+		if !strings.Contains(line, "msm8916d-rx") {
 			continue
 		}
 		f := strings.Fields(line)

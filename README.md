@@ -1,4 +1,4 @@
-# MSM8916 Manager（uz801d）
+# MSM8916 Manager（msm8916d）
 
 > 把高通 8916（MSM8916）方案的 OpenStick 随身 Wi-Fi，变成一台可以本地管理的 4G 路由器。
 
@@ -54,10 +54,10 @@ nftables 和 systemd，提供蜂窝网络、APN、短信、Wi-Fi 热点、客户
 
 | 适合 | 不适合 |
 | --- | --- |
-| 已经刷好 OpenStick Debian 的 UZ801 用户 | 仍在使用官方 Android/厂商固件的设备 |
+| 已经刷好 OpenStick Debian 的高通 8916 设备用户 | 仍在使用官方 Android/厂商固件的设备 |
 | 希望数据留在本地、不要云账号的人 | 需要厂商云管理、远程定位等官方服务的人 |
 | 需要短信、APN、热点、WiFi 共享等完整功能的用户 | 期待开箱即用的成品固件、不想接触 Linux 的用户 |
-| 愿意通过 SSH 安装和排查问题的用户 | 要求 5 GHz 热点或双频并发的场景（UZ801 硬件不支持） |
+| 愿意通过 SSH 安装和排查问题的用户 | 要求 5 GHz 热点或双频并发的场景（高通 8916 硬件不支持） |
 
 ---
 
@@ -96,9 +96,9 @@ uname -m
 
 | 输出 | 使用 |
 | --- | --- |
-| `aarch64` | `uz801d-linux-arm64`（最常见） |
-| `armv7l` | `uz801d-linux-armv7` |
-| `x86_64` | `uz801d-linux-amd64` |
+| `aarch64` | `msm8916d-linux-arm64`（最常见） |
+| `armv7l` | `msm8916d-linux-armv7` |
+| `x86_64` | `msm8916d-linux-amd64` |
 
 ### 2. 获取二进制
 
@@ -106,26 +106,26 @@ uname -m
 
 ```sh
 git clone <你的仓库地址>
-cd UZ801
+cd OpenStick-ZU801-WEB
 ./build.sh 0.1.0
 ```
 
 产物在 `dist/`：
 
-- `dist/uz801d-linux-arm64`
-- `dist/uz801d-linux-armv7`
-- `dist/uz801d-linux-amd64`
-- `dist/uz801d-windows-amd64.exe`（仅用于 Windows 预览界面，不用于设备部署）
+- `dist/msm8916d-linux-arm64`
+- `dist/msm8916d-linux-armv7`
+- `dist/msm8916d-linux-amd64`
+- `dist/msm8916d-windows-amd64.exe`（仅用于 Windows 预览界面，不用于设备部署）
 
 ### 3. 安装到设备
 
 ```sh
-scp dist/uz801d-linux-arm64 root@192.168.68.1:/tmp/uz801d
+scp dist/msm8916d-linux-arm64 root@192.168.68.1:/tmp/msm8916d
 scp -r deploy root@192.168.68.1:/tmp/
 ssh root@192.168.68.1
 
 cd /tmp
-sh deploy/install.sh /tmp/uz801d --install-deps
+sh deploy/install.sh /tmp/msm8916d --install-deps
 ```
 
 `--install-deps` 会用 apt 安装缺失的系统组件。如果设备已经装好依赖，可以去掉这个参数。
@@ -142,7 +142,7 @@ http://192.168.68.1
 默认监听 **80 端口**。初始账号信息在：
 
 ```sh
-cat /etc/uz801d/initial-password
+cat /etc/msm8916d/initial-password
 ```
 
 默认用户名是 `admin`（可在后台修改），密码是安装时生成的随机密码。
@@ -180,41 +180,41 @@ sudo apt-get install -y network-manager modemmanager hostapd dnsmasq iw nftables
 `deploy/install.sh` 会：
 
 1. 检查并可选安装系统依赖；
-2. 安装程序到 `/usr/local/bin/uz801d`；
-3. 首次安装时生成 `/etc/uz801d/config.json` 和随机管理密码
-   （写入 `/etc/uz801d/initial-password`，修改密码后自动删除）；
-4. 安装 `uz801d.service`、`uz801d-ap.service`、`uz801d-dhcp.service`；
-5. 设置 `uz801d.service` 开机自启并启动。
+2. 安装程序到 `/usr/local/bin/msm8916d`；
+3. 首次安装时生成 `/etc/msm8916d/config.json` 和随机管理密码
+   （写入 `/etc/msm8916d/initial-password`，修改密码后自动删除）；
+4. 安装 `msm8916d.service`、`msm8916d-ap.service`、`msm8916d-dhcp.service`；
+5. 设置 `msm8916d.service` 开机自启并启动。
 
-`uz801d-ap.service` 和 `uz801d-dhcp.service` 只在旧的 AP-STA 中继或 hostapd 热点需要时由主程序拉起，
+`msm8916d-ap.service` 和 `msm8916d-dhcp.service` 只在旧的 AP-STA 中继或 hostapd 热点需要时由主程序拉起，
 **不要手动设置开机自启**。
 
 ### 默认路径与端口
 
 | 内容 | 路径 / 值 |
 | --- | --- |
-| 程序 | `/usr/local/bin/uz801d` |
-| 配置 | `/etc/uz801d/config.json`（0600，写入时保留 `.bak`） |
-| 状态 | `/var/lib/uz801d/state.json` |
-| 初始密码 | `/etc/uz801d/initial-password` |
+| 程序 | `/usr/local/bin/msm8916d` |
+| 配置 | `/etc/msm8916d/config.json`（0600，写入时保留 `.bak`） |
+| 状态 | `/var/lib/msm8916d/state.json` |
+| 初始密码 | `/etc/msm8916d/initial-password` |
 | 监听地址 | `:80`（可在配置中修改） |
-| 服务 | `uz801d.service` |
+| 服务 | `msm8916d.service` |
 
 ### 升级
 
 升级只需要替换二进制并重启服务。已有配置和流量/短信状态会保留：
 
 ```sh
-scp dist/uz801d-linux-arm64 root@192.168.68.1:/tmp/uz801d
+scp dist/msm8916d-linux-arm64 root@192.168.68.1:/tmp/msm8916d
 scp -r deploy root@192.168.68.1:/tmp/
 ssh root@192.168.68.1
-cd /tmp && sh deploy/install.sh /tmp/uz801d
+cd /tmp && sh deploy/install.sh /tmp/msm8916d
 ```
 
 或者手动替换二进制后执行：
 
 ```sh
-systemctl restart uz801d
+systemctl restart msm8916d
 ```
 
 > **注意**：前端页面是编译进二进制的。只刷新浏览器不会更新界面，必须替换二进制并重启服务。
@@ -226,22 +226,22 @@ systemctl restart uz801d
 
 ```sh
 sh deploy/uninstall.sh          # 停止服务，删除程序；保留配置与状态
-sh deploy/uninstall.sh --purge  # 连同 /etc/uz801d 和 /var/lib/uz801d 一起删除
+sh deploy/uninstall.sh --purge  # 连同 /etc/msm8916d 和 /var/lib/msm8916d 一起删除
 ```
 
 ### 手动运行（调试）
 
 ```sh
-uz801d -config /etc/uz801d/config.json -state /var/lib/uz801d/state.json -listen :80 -debug
+msm8916d -config /etc/msm8916d/config.json -state /var/lib/msm8916d/state.json -listen :80 -debug
 ```
 
 常用命令：
 
 ```sh
-systemctl status uz801d
-journalctl -u uz801d -f
-uz801d -version
-uz801d -config /etc/uz801d/config.json -reset-password   # 生成新的随机密码
+systemctl status msm8916d
+journalctl -u msm8916d -f
+msm8916d -version
+msm8916d -config /etc/msm8916d/config.json -reset-password   # 生成新的随机密码
 ```
 
 ---
@@ -258,8 +258,22 @@ uz801d -config /etc/uz801d/config.json -reset-password   # 生成新的随机密
 - **APN**：在“蜂窝网络 → APN”中新增或编辑，填写名称、APN、用户名/密码（可选）。
   “保存并连接”会先保存配置，再立即拨号。
 - **流量开关**：开启时使用当前 APN 拨号，关闭时断开 PDP，不改变 APN 选择。
+  关闭时会同时把 NetworkManager 连接设为 `autoconnect=no`，**重启后不会自己拨回来**；
+  再次开启会恢复 `autoconnect=yes`。
 - **网络模式**：可限制为 4G/3G/2G 等组合，具体取决于模块支持。
 - **USSD / PIN / PUK / 模块重置**：在蜂窝网络页对应区域操作。
+- **拨号由谁负责**：`config.json` 的 `modem.connection_manager` 可选 `auto` / `mmcli` / `nmcli`。
+  如果系统里已经有 NetworkManager 的 `gsm` 连接（多数 OpenStick 镜像都预置了一条），建议设成
+  **`nmcli`** 并把 `modem.connection_name` 指向它（例如 `modem`），让 NM 独占拨号；
+  否则 NM 自动拨号和网页的 `mmcli --simple-connect` 会互相抢同一个 modem。
+- **模块编号会变**：`mmcli` 的 modem 索引在反复重连后可能变成 1、2…，程序会自动回退到
+  `modem-list` 里的第一个，不用手改 `modem.index`。
+- **SIM 有 PIN 时**：不同 ModemManager 版本的 mmcli 选项不一样 —— 1.22 及以前是
+  SIM 对象动作 `-m N --sim S --pin=PIN`，1.26 以后改成 `-m N --sim-pin=PIN`，程序会先试旧写法、
+  只在报“选项不认识”时回退（避免一次输入白耗两次 PIN 机会）。
+  PIN 只在解锁时使用，不会写入配置或状态文件；每次设备上电后需要在页面上重新输入。
+- **避免驻留到别家网络**：插的是联通卡却驻留到移动（46000）时，网络只给 `limited` 服务，
+  表现为能扫到归属网络但一直 `registration: idle`。给连接加 `gsm.home-only yes` 即可。
 - **飞行模式**：
   - 开启后依次执行 `nmcli radio wwan off`、`rfkill block wwan`、`mmcli --disable`
     （存在哪个就用哪个），彻底关闭蜂窝射频以降低发热，**Wi-Fi 热点不受影响**。
@@ -288,7 +302,7 @@ uz801d -config /etc/uz801d/config.json -reset-password   # 生成新的随机密
 
 ```sh
 # 先把固件放到仓库根目录的 firmware/modem-m8916/（约 40 MB，不入库，见下）
-sudo sh install.sh ./dist/uz801d-linux-arm64 --fix-firmware
+sudo sh install.sh ./dist/msm8916d-linux-arm64 --fix-firmware
 ```
 
 固件**不在仓库里**（40+ MB，已在 `.gitignore` 中忽略），自己取一份即可：
@@ -325,6 +339,17 @@ mmcli -L
 页面布局：**发送短信 → 短信列表 → 短信转发**。即使没插 SIM 卡 / ModemManager 不可用，
 发送框、列表和转发设置也都会照常显示，只在顶部加一条提示。
 
+#### PS-only（纯数据）设备收不到短信是正常的
+
+LTE 上收发短信需要 **CS 域（SGs）或 IMS**。如果模块/卡是纯数据模式，页面会显示：
+
+> 当前模块/卡为纯数据（PS-only）模式：LTE 收短信需要 CS/SGS，收发均不可用
+
+判定依据是 ModemManager 报的 `ue-mode-operation: ps-1`（对应 `AT+CEMODE=3`）。
+这种状态下 `AT+CEMODE=2` 可能被模块直接拒绝，设备侧无法绕过，需要一张开通短信的 SIM
+（或支持 CS/PS 的模块固件）。解析层会把 `ps-1`/`ps-2` 判为 PS-only，
+`cs-ps-1`/`cs-ps-2` 则正常放行。
+
 ### 短信转发
 
 在「短信 → 短信转发」中可以把新收到的短信推送到手机或群机器人，支持三种渠道：
@@ -347,15 +372,19 @@ mmcli -L
 - 「测试」按钮会用表单里当前填写的内容发送一条示例消息（无需先保存），便于先验证 Webhook；
 - 三个渠道都是 HTTPS 请求，依赖系统 CA 证书。精简 rootfs 里常常没有
   `/etc/ssl/certs/ca-certificates.crt`，这时「测试」会报
-  `x509: certificate signed by unknown authority`。装 `ca-certificates` 后**重启 uz801d**
+  `x509: certificate signed by unknown authority`。装 `ca-certificates` 后**重启 msm8916d**
   （Go 会缓存证书池）即可；`install.sh --install-deps` 已经包含这个包。
-- Webhook、设备 Key 和签名密钥以明文保存在 `/etc/uz801d/config.json`（0600），备份和导出配置时请注意。
+- Webhook、设备 Key 和签名密钥以明文保存在 `/etc/msm8916d/config.json`（0600），备份和导出配置时请注意。
 
 ### Wi-Fi 热点
 
-- UZ801 的板载无线网卡只支持 **2.4 GHz**。页面固定显示 2.4 GHz，信道范围 `0–14`
+- 高通 8916 的板载无线网卡只支持 **2.4 GHz**。页面固定显示 2.4 GHz，信道范围 `0–14`
   （`0` 表示自动）。旧配置中的 5 GHz 设置会在加载时自动改回 2.4 GHz / 自动。
 - 可设置 SSID、密码、加密方式、隐藏网络、最大客户端数和国家代码。
+- 加密方式支持 `open` / `wpa2` / `wpa3`。选 **wpa3** 时会自动设置
+  `pmf=2`（WPA3-SAE 强制要求 802.11w，缺了它 wpa_supplicant 会直接拒绝启动热点）
+  以及 `proto=rsn`、`pairwise/group=ccmp`。
+  > WPA3 是纯 SAE，老设备（不支持 WPA3 的 IoT 设备/旧手机）连不上；这类环境请用 WPA2。
 - 后端可选 `nmcli`、`hostapd` 或自动检测。
 - **停止热点**会先关闭 NetworkManager 热点连接并禁用其自动重连，再停止 hostapd/dnsmasq
   和桥接单元。只有确认 AP 真正停止后才提示成功，仍在运行时会返回具体错误。
@@ -371,7 +400,7 @@ mmcli -L
 1. `wlan0` 通过 NetworkManager 连接上游 WiFi，获取 IP 与默认路由；
 2. `usb0` 保持 `192.168.68.1/16`，系统 dnsmasq 继续提供 DHCP/DNS；
 3. 开启 IPv4 转发；
-4. nftables 的 `inet uz801d_bridge` 表对 `usb0 <-> wlan0` 做转发放行和 `masquerade`。
+4. nftables 的 `inet msm8916d_bridge` 表对 `usb0 <-> wlan0` 做转发放行和 `masquerade`。
 
 页面支持：
 
@@ -414,10 +443,18 @@ mmcli -L
 - 当前账期的总流量、上下行、实时速率和配额显示在流量页顶部。
 - **月度历史**保留最近 36 个已结束账期；账期切换时自动归档并清零当前账期。
 - **本账期每日流量**按本地自然日拆分，从账期开始到今天逐日列出，没有流量的日期显示 0。
-- 日/月数据随 `/var/lib/uz801d/state.json` 持久化。
+- 日/月数据随 `/var/lib/msm8916d/state.json` 持久化。
   - “重置本账期”只清当前账期和每日明细，月度历史保留；
   - “重置累计流量”会连同历史一起清除。
 - 可设置流量配额并在超限时断网（`data.enforce_quota`）。
+
+> **计数是怎么来的**：每 60 秒读一次 `iptables -t mangle` 里的两条规则
+> （`PREROUTING -i wwan0` 记下行、`POSTROUTING -o wwan0` 记上行，注释分别是
+> `msm8916d-rx` / `msm8916d-tx`），覆盖设备自身流量和热点/USB 转发流量。规则由程序自动创建。
+>
+> 不用网卡计数器是因为 MSM8916 + bam-dmux 的 `/sys/class/net/wwan0/statistics` 恒为 0；
+> 不用 `qmicli --wds-get-packet-statistics` 是因为 bam-dmux 的 QMI 端点只允许一个客户端，
+> 采样会把 ModemManager 踢下线（表现为模块反复重新枚举）。
 
 ### 系统与诊断
 
@@ -442,7 +479,7 @@ mmcli -L
 1. **必须先有 OpenStick Debian**
    本项目不是刷机包，不负责解锁、刷写引导或安装 Debian。
 
-2. **UZ801 只支持 2.4 GHz Wi-Fi**
+2. **高通 8916 只支持 2.4 GHz Wi-Fi**
    页面不会提供 5 GHz 选项。旧配置里的 5 GHz 频段和 5G 信道会自动改回 2.4 GHz / 自动。
 
 3. **单网卡 AP+STA 取决于无线驱动**
@@ -464,7 +501,7 @@ mmcli -L
    获取二进制，并在升级前备份配置。
 
 7. **不要把辅助服务设为开机自启**
-   `uz801d-ap.service` 和 `uz801d-dhcp.service` 只用于旧的 AP-STA 中继，WiFi 转 USB
+   `msm8916d-ap.service` 和 `msm8916d-dhcp.service` 只用于旧的 AP-STA 中继，WiFi 转 USB
    共享不需要它们。手动 enable 可能与普通热点冲突。
 
 8. **修改网络配置可能导致失联**
@@ -482,7 +519,7 @@ mmcli -L
 
 ## 配置与状态文件
 
-默认配置 `/etc/uz801d/config.json`（0600）。主要字段：
+默认配置 `/etc/msm8916d/config.json`（0600）。主要字段：
 
 ```jsonc
 {
@@ -508,7 +545,7 @@ mmcli -L
     "ssid": "4G-UFI-XX",
     "password": "1234567890",
     "security": "wpa2",             // wpa2 | wpa3 | open
-    "band": "bg",                   // UZ801 仅支持 2.4 GHz
+    "band": "bg",                   // 高通 8916 仅支持 2.4 GHz
     "channel": 6,
     "bridge": {
       "mode": "usb",                  // usb | ap_sta
@@ -560,13 +597,13 @@ mmcli -L
 }
 ```
 
-状态文件 `/var/lib/uz801d/state.json` 保存流量累计、月度历史、当前账期每日明细、短信已读
+状态文件 `/var/lib/msm8916d/state.json` 保存流量累计、月度历史、当前账期每日明细、短信已读
 标记、客户端历史和 MAC 黑名单。
 
 备份与迁移时，建议同时备份：
 
 ```sh
-tar czf uz801d-backup.tgz /etc/uz801d /var/lib/uz801d
+tar czf msm8916d-backup.tgz /etc/msm8916d /var/lib/msm8916d
 ```
 
 ### 修改管理密码
@@ -575,12 +612,12 @@ tar czf uz801d-backup.tgz /etc/uz801d /var/lib/uz801d
 - 命令行：
 
   ```sh
-  uz801d -config /etc/uz801d/config.json -reset-password
+  msm8916d -config /etc/msm8916d/config.json -reset-password
   ```
 
-  该命令会生成随机密码并写入 `/etc/uz801d/initial-password`。
+  该命令会生成随机密码并写入 `/etc/msm8916d/initial-password`。
 
-通过后台修改密码成功后，`/etc/uz801d/initial-password` 会被自动删除。
+通过后台修改密码成功后，`/etc/msm8916d/initial-password` 会被自动删除。
 
 ---
 
@@ -588,7 +625,7 @@ tar czf uz801d-backup.tgz /etc/uz801d /var/lib/uz801d
 
 - 第一次登录后立即修改默认随机密码，并考虑修改默认管理员用户名；
 - 不要直接把 80 端口暴露到公网，使用 VPN、frp + HTTPS 或反向代理；
-- 定期备份 `/etc/uz801d` 和 `/var/lib/uz801d`；
+- 定期备份 `/etc/msm8916d` 和 `/var/lib/msm8916d`；
 - 不要从不可信来源下载二进制，升级前核对文件来源；
 - 如果设备丢失或转手，执行恢复出厂或 `uninstall.sh --purge` 清除配置和流量/短信状态。
 
@@ -609,8 +646,8 @@ tar czf uz801d-backup.tgz /etc/uz801d /var/lib/uz801d
 **后台打不开？**
 
 ```sh
-systemctl status uz801d
-journalctl -u uz801d -b
+systemctl status msm8916d
+journalctl -u msm8916d -b
 ss -lntp | grep :80
 ```
 
@@ -618,7 +655,7 @@ ss -lntp | grep :80
 
 **升级后界面没变化？**
 
-前端是编译进二进制的。必须替换 `/usr/local/bin/uz801d` 并重启服务，然后强制刷新浏览器
+前端是编译进二进制的。必须替换 `/usr/local/bin/msm8916d` 并重启服务，然后强制刷新浏览器
 （Ctrl+F5 / 清除缓存）。只执行 `git pull` 或刷新页面不会更新界面。
 
 **配置里还是 8080？**
@@ -632,7 +669,7 @@ ss -lntp | grep :80
 可以切换到 hostapd 后端排除 NetworkManager 干扰：
 
 ```sh
-journalctl -u NetworkManager -u uz801d -f
+journalctl -u NetworkManager -u msm8916d -f
 ```
 
 **点击“停止热点”没有效果？**
@@ -660,9 +697,9 @@ http://192.168.68.1
 停止共享：
 
 ```sh
-systemctl stop uz801d
-# 编辑 /etc/uz801d/config.json，把 wifi.bridge.enabled 改为 false
-systemctl start uz801d
+systemctl stop msm8916d
+# 编辑 /etc/msm8916d/config.json，把 wifi.bridge.enabled 改为 false
+systemctl start msm8916d
 ```
 
 **流量统计为 0？**
@@ -684,8 +721,8 @@ mmcli -L
 **忘记管理密码？**
 
 ```sh
-uz801d -config /etc/uz801d/config.json -reset-password
-cat /etc/uz801d/initial-password
+msm8916d -config /etc/msm8916d/config.json -reset-password
+cat /etc/msm8916d/initial-password
 ```
 
 然后重启服务，用新密码登录。
@@ -715,10 +752,10 @@ Windows PowerShell：
 产物：
 
 ```text
-dist/uz801d-linux-arm64
-dist/uz801d-linux-armv7
-dist/uz801d-linux-amd64
-dist/uz801d-windows-amd64.exe
+dist/msm8916d-linux-arm64
+dist/msm8916d-linux-armv7
+dist/msm8916d-linux-amd64
+dist/msm8916d-windows-amd64.exe
 ```
 
 运行测试：
@@ -731,8 +768,8 @@ go test ./...
 Windows 下预览界面与 API：
 
 ```powershell
-.\dist\uz801d-windows-amd64.exe -config "$env:TEMP\uz801d\config.json" -state "$env:TEMP\uz801d\state.json" -init -password "ChangeMe123"
-.\dist\uz801d-windows-amd64.exe -config "$env:TEMP\uz801d\config.json" -state "$env:TEMP\uz801d\state.json" -listen 127.0.0.1:80
+.\dist\msm8916d-windows-amd64.exe -config "$env:TEMP\msm8916d\config.json" -state "$env:TEMP\msm8916d\state.json" -init -password "ChangeMe123"
+.\dist\msm8916d-windows-amd64.exe -config "$env:TEMP\msm8916d\config.json" -state "$env:TEMP\msm8916d\state.json" -listen 127.0.0.1:80
 ```
 
 前端位于 `web/static/`，是普通 HTML/CSS/JavaScript，通过 `go:embed` 打进二进制，
@@ -749,7 +786,7 @@ Windows 下预览界面与 API：
 {"ok": false, "error": "错误信息"}
 ```
 
-除登录、会话和健康检查外，均需要会话 Cookie `uz801d_session`；所有写操作还需要
+除登录、会话和健康检查外，均需要会话 Cookie `msm8916d_session`；所有写操作还需要
 `X-CSRF-Token`（值来自 `/api/session` 或登录响应的 `data.csrf`）。
 
 | 方法 | 路径 | 说明 |
@@ -776,7 +813,7 @@ Windows 下预览界面与 API：
 ## 目录结构
 
 ```text
-cmd/uz801d/          程序入口与命令行
+cmd/msm8916d/          程序入口与命令行
 internal/auth        密码、会话、登录限流
 internal/config      配置模型、校验、原子保存
 internal/parse       mmcli/nmcli/iw/hostapd/dnsmasq 输出解析
@@ -799,7 +836,7 @@ deploy               systemd 单元与安装/卸载脚本
 - 相关日志：
 
   ```sh
-  journalctl -u uz801d -b --no-pager | tail -n 100
+  journalctl -u msm8916d -b --no-pager | tail -n 100
   ```
 
 - 模块信息（如与蜂窝相关）：
@@ -827,7 +864,7 @@ deploy               systemd 单元与安装/卸载脚本
 本项目仅用于个人设备管理与学习用途。使用前请确认当地关于热点共享、流量转发和无线电
 使用的合规要求。
 
-- 本项目不是 UZ801 厂商官方产品，与厂商无关；
+- 本项目不是任何设备厂商的官方产品，与厂商无关；
 - 修改网络、热点、防火墙和 systemd 配置可能导致设备失联，请自行做好备份和恢复准备；
 - 软件按“现状”提供，不对因使用造成的设备损坏、数据丢失或网络问题承担责任。
 

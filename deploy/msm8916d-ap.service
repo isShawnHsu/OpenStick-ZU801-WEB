@@ -1,12 +1,12 @@
 [Unit]
 Description=MSM8916 bridge hostapd (AP-STA relay)
 After=network.target
-Before=uz801d-dhcp.service
-# Started on demand by uz801d; do not enable at boot.
+Before=msm8916d-dhcp.service
+# Started on demand by msm8916d; do not enable at boot.
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/hostapd -P /run/uz801d-ap.pid /etc/hostapd/uz801d-ap.conf
+ExecStart=/usr/sbin/hostapd -P /run/msm8916d-ap.pid /etc/hostapd/msm8916d-ap.conf
 Restart=on-failure
 RestartSec=3
 KillMode=mixed

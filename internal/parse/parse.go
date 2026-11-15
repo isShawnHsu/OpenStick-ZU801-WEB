@@ -1,4 +1,4 @@
-// Package parse contains pure parsers for the command output used by uz801d.
+// Package parse contains pure parsers for the command output used by msm8916d.
 package parse
 
 import (
@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"uz801d/internal/netutil"
+	"msm8916d/internal/netutil"
 )
 
 // ---------------------------------------------------------------- ModemManager

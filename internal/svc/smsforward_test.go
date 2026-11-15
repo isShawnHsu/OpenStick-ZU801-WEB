@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"uz801d/internal/config"
+	"msm8916d/internal/config"
 )
 
 func TestSMSForwardMessage(t *testing.T) {
@@ -69,7 +69,7 @@ func TestSendBarkForward(t *testing.T) {
 		Type:  "bark",
 		URL:   srv.URL,
 		Token: "devkey",
-		Group: "uz801d",
+		Group: "msm8916d",
 		Sound: "bell",
 	}
 	msg := SMS{Number: "10086", Text: "hello", State: "received"}
@@ -82,7 +82,7 @@ func TestSendBarkForward(t *testing.T) {
 	if !strings.Contains(got["body"].(string), "hello") {
 		t.Errorf("body = %v", got["body"])
 	}
-	if got["group"] != "uz801d" || got["sound"] != "bell" {
+	if got["group"] != "msm8916d" || got["sound"] != "bell" {
 		t.Errorf("group/sound = %v/%v", got["group"], got["sound"])
 	}
 }

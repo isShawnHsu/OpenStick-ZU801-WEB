@@ -1,4 +1,4 @@
-// Command uz801d is the MSM8916 (Qualcomm 8916) OpenStick web management daemon.
+// Command msm8916d is the MSM8916 (Qualcomm 8916) OpenStick web management daemon.
 package main
 
 import (
@@ -14,12 +14,12 @@ import (
 	"syscall"
 	"time"
 
-	"uz801d/internal/auth"
-	"uz801d/internal/buildinfo"
-	"uz801d/internal/config"
-	"uz801d/internal/server"
-	"uz801d/internal/state"
-	"uz801d/internal/svc"
+	"msm8916d/internal/auth"
+	"msm8916d/internal/buildinfo"
+	"msm8916d/internal/config"
+	"msm8916d/internal/server"
+	"msm8916d/internal/state"
+	"msm8916d/internal/svc"
 )
 
 func main() {
@@ -40,7 +40,7 @@ func main() {
 		return
 	}
 
-	logger := log.New(os.Stderr, "uz801d: ", log.LstdFlags)
+	logger := log.New(os.Stderr, "msm8916d: ", log.LstdFlags)
 	if *debug {
 		logger.SetFlags(log.LstdFlags | log.Lshortfile)
 	}
@@ -200,7 +200,7 @@ func defaultConfigPath() string {
 		if base == "" {
 			base = os.TempDir()
 		}
-		return filepath.Join(base, "uz801d", "config.json")
+		return filepath.Join(base, "msm8916d", "config.json")
 	}
 	return config.DefaultConfigPath
 }
@@ -211,7 +211,7 @@ func defaultStatePath() string {
 		if base == "" {
 			base = os.TempDir()
 		}
-		return filepath.Join(base, "uz801d", "state.json")
+		return filepath.Join(base, "msm8916d", "state.json")
 	}
 	return config.DefaultStatePath
 }

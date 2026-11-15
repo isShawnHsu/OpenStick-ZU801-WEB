@@ -1,6 +1,6 @@
 #!/bin/sh
 # MSM8916 Manager installer for OpenStick Debian.
-# Usage: ./install.sh [/path/to/uz801d] [--install-deps] [--no-start]
+# Usage: ./install.sh [/path/to/msm8916d] [--install-deps] [--no-start]
 set -eu
 
 BIN_SRC=""
@@ -27,12 +27,12 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 if [ -z "$BIN_SRC" ]; then
-  for cand in ./uz801d ./dist/uz801d ./uz801d-linux-arm64 ./uz801d-linux-armv7; do
+  for cand in ./msm8916d ./dist/msm8916d ./msm8916d-linux-arm64 ./msm8916d-linux-armv7; do
     if [ -f "$cand" ]; then BIN_SRC="$cand"; break; fi
   done
 fi
 if [ -z "$BIN_SRC" ] || [ ! -f "$BIN_SRC" ]; then
-  echo "找不到 uz801d 可执行文件，请把对应架构的二进制放在当前目录或作为参数传入。" >&2
+  echo "找不到 msm8916d 可执行文件，请把对应架构的二进制放在当前目录或作为参数传入。" >&2
   exit 1
 fi
 
@@ -131,18 +131,18 @@ elif [ "$FIX_FIRMWARE" -eq 0 ]; then
   check_firmware >/dev/null 2>&1 || echo "    提示: 重新运行并加 --fix-firmware 可自动换成正确固件"
 fi
 
-echo "==> 安装 uz801d"
-install -m 0755 "$BIN_SRC" /usr/local/bin/uz801d
-mkdir -p /etc/uz801d /var/lib/uz801d /var/lib/misc
-chmod 0755 /etc/uz801d /var/lib/uz801d
+echo "==> 安装 msm8916d"
+install -m 0755 "$BIN_SRC" /usr/local/bin/msm8916d
+mkdir -p /etc/msm8916d /var/lib/msm8916d /var/lib/misc
+chmod 0755 /etc/msm8916d /var/lib/msm8916d
 
-CONFIG=/etc/uz801d/config.json
+CONFIG=/etc/msm8916d/config.json
 if [ ! -f "$CONFIG" ]; then
   echo "==> 生成默认配置与随机管理密码"
-  /usr/local/bin/uz801d -config "$CONFIG" -state /var/lib/uz801d/state.json -init
+  /usr/local/bin/msm8916d -config "$CONFIG" -state /var/lib/msm8916d/state.json -init
   echo
-  echo "    初始账号信息保存在 /etc/uz801d/initial-password"
-  cat /etc/uz801d/initial-password
+  echo "    初始账号信息保存在 /etc/msm8916d/initial-password"
+  cat /etc/msm8916d/initial-password
 else
   echo "==> 保留已有配置 $CONFIG"
   # 老版本默认监听 :8080；升级到默认 80 端口时迁移一次，保留备份。
@@ -155,16 +155,16 @@ else
   fi
   if [ "$_listen" != ":80" ]; then
     echo "    当前监听地址: ${_listen:-未设置（默认 :80）}"
-    echo "    如需改为 80 端口，请编辑 $CONFIG 的 listen 字段后重启 uz801d"
+    echo "    如需改为 80 端口，请编辑 $CONFIG 的 listen 字段后重启 msm8916d"
   fi
 fi
 
 echo "==> 安装 systemd 单元"
 UNIT_SRC="$SCRIPT_DIR"
-if [ ! -f "$UNIT_SRC/uz801d.service" ]; then
+if [ ! -f "$UNIT_SRC/msm8916d.service" ]; then
   UNIT_SRC="$SCRIPT_DIR/deploy"
 fi
-for unit in uz801d.service uz801d-ap.service uz801d-dhcp.service uz801d-emmc-led.service; do
+for unit in msm8916d.service msm8916d-ap.service msm8916d-dhcp.service msm8916d-emmc-led.service; do
   if [ -f "$UNIT_SRC/$unit" ]; then
     install -m 0644 "$UNIT_SRC/$unit" "/etc/systemd/system/$unit"
   else
@@ -172,20 +172,20 @@ for unit in uz801d.service uz801d-ap.service uz801d-dhcp.service uz801d-emmc-led
   fi
 done
 if [ -f "$UNIT_SRC/emmc-led-off.sh" ]; then
-  install -m 0755 "$UNIT_SRC/emmc-led-off.sh" /usr/local/bin/uz801d-emmc-led-off
+  install -m 0755 "$UNIT_SRC/emmc-led-off.sh" /usr/local/bin/msm8916d-emmc-led-off
 fi
 
 systemctl daemon-reload
-systemctl enable uz801d.service
+systemctl enable msm8916d.service
 if [ "$ENABLE_EMMC_LED_OFF" -eq 1 ]; then
   echo "==> 启用 eMMC 活动灯关闭服务（有触发重启的风险）"
-  systemctl enable uz801d-emmc-led.service
+  systemctl enable msm8916d-emmc-led.service
 fi
 
 if [ "$START" -eq 1 ]; then
-  systemctl restart uz801d.service
+  systemctl restart msm8916d.service
   sleep 1
-  systemctl --no-pager --lines=0 status uz801d.service || true
+  systemctl --no-pager --lines=0 status msm8916d.service || true
 fi
 
 IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n1)
@@ -197,10 +197,10 @@ cat <<EOF
 安装完成。
   管理地址: http://$IP
   配置文件: $CONFIG
-  状态文件: /var/lib/uz801d/state.json
-  服务管理: systemctl status uz801d
-  查看日志: journalctl -u uz801d -f
-  修改密码: uz801d -config $CONFIG -reset-password
+  状态文件: /var/lib/msm8916d/state.json
+  服务管理: systemctl status msm8916d
+  查看日志: journalctl -u msm8916d -f
+  修改密码: msm8916d -config $CONFIG -reset-password
 
 WiFi 桥接说明:
   - 桥接需要 NetworkManager(nmcli)、iw、hostapd、dnsmasq、nftables。

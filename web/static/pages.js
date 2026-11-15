@@ -750,7 +750,7 @@ function systemView(sys, leds, ledControl) {
       '</div><button class="primary" type="submit">' + esc(t('common.save')) + '</button></form>') +
     card(t('system.logs'),
       '<div class="inline-form">' +
-      sel('log_unit', logUnit, [['', t('common.all')], ['uz801d', 'uz801d'], ['frpc', 'frpc'], ['NetworkManager', 'NetworkManager'], ['ModemManager', 'ModemManager'], ['hostapd', 'hostapd'], ['dnsmasq', 'dnsmasq']]) +
+      sel('log_unit', logUnit, [['', t('common.all')], ['msm8916d', 'msm8916d'], ['frpc', 'frpc'], ['NetworkManager', 'NetworkManager'], ['ModemManager', 'ModemManager'], ['hostapd', 'hostapd'], ['dnsmasq', 'dnsmasq']]) +
       '<input type="number" name="log_lines" min="10" max="2000" value="' + attr(logLines) + '">' +
       '<button class="primary" data-action="logs-load">' + esc(t('system.loadLogs')) + '</button></div>' +
       '<pre class="logs">' + esc(logs || t('system.logsEmpty')) + '</pre>') +

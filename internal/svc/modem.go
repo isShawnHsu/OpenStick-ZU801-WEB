@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"uz801d/internal/config"
-	"uz801d/internal/parse"
-	"uz801d/internal/state"
+	"msm8916d/internal/config"
+	"msm8916d/internal/parse"
+	"msm8916d/internal/state"
 )
 
 // ModemStatus is the aggregated cellular state shown by the dashboard.
@@ -649,6 +649,12 @@ func (m *Manager) DisconnectAPN(ctx context.Context) error {
 		if name == "" {
 			name = modemNMConnection
 		}
+		// 关掉自动重连，否则重启后 NetworkManager 会自己把流量拨回来，
+		// 网页上的"流量开关"看起来就像没记住关闭状态。
+		if _, err := m.Run(ctx, 10*time.Second, "nmcli", "connection", "modify", name,
+			"connection.autoconnect", "no"); err != nil {
+			m.log.Printf("关闭 %s 自动重连失败: %v", name, err)
+		}
 		if _, err := m.Run(ctx, 20*time.Second, "nmcli", "connection", "down", name); err != nil {
 			// Inactive connections make "down" fail harmlessly; verification
 			// below decides whether data is really still up.
@@ -892,19 +898,61 @@ func (m *Manager) SetSIMPin(ctx context.Context, kind, pin, puk string) error {
 	if !regexp.MustCompile(`^[0-9]{4,8}$`).MatchString(pin) {
 		return fmt.Errorf("PIN 必须为 4-8 位数字")
 	}
+	// mmcli 的 PIN 选项在不同 ModemManager 版本里不一样：
+	//   1.18 (Debian 11)：SIM 对象动作 `-m N --sim S --pin=PIN`
+	//   1.26+          ：`-m N --sim-pin=PIN`
+	// 先试旧写法，只有报“语法不认识”时才回退，避免一次输入白白消耗两次 PIN 重试。
+	simIdx := "0"
+	if info, ierr := m.modemInfo(ctx, idx); ierr == nil {
+		if v := simIndexFromPath(info.SimPath); v != "" {
+			simIdx = v
+		}
+	}
+
+	run := func(oldArgs, newArgs []string) error {
+		if _, err := m.mmcli(ctx, 30*time.Second, oldArgs...); err == nil {
+			return nil
+		} else if !isMMCLIOptionError(err) {
+			return err
+		}
+		_, err := m.mmcli(ctx, 30*time.Second, newArgs...)
+		return err
+	}
+
 	if kind == "puk" {
 		if !regexp.MustCompile(`^[0-9]{8}$`).MatchString(puk) {
 			return fmt.Errorf("PUK 必须为 8 位数字")
 		}
-		if _, err := m.mmcli(ctx, 30*time.Second, "-m", idx, "--sim-puk="+puk+","+pin); err != nil {
+		err := run(
+			[]string{"-m", idx, "--sim", simIdx, "--puk", puk, "--pin", pin},
+			[]string{"-m", idx, "--sim-puk=" + puk, "--sim-pin=" + pin},
+		)
+		if err != nil {
 			return fmt.Errorf("PUK 解锁失败: %w", err)
 		}
 		return nil
 	}
-	if _, err := m.mmcli(ctx, 30*time.Second, "-m", idx, "--sim-pin="+pin); err != nil {
+
+	err = run(
+		[]string{"-m", idx, "--sim", simIdx, "--pin", pin},
+		[]string{"-m", idx, "--sim-pin=" + pin},
+	)
+	if err != nil {
 		return fmt.Errorf("PIN 解锁失败: %w", err)
 	}
 	return nil
+}
+
+// isMMCLIOptionError reports whether mmcli failed because it did not understand
+// the action/option at all (in which case nothing was sent to the SIM).
+func isMMCLIOptionError(err error) bool {
+	s := strings.ToLower(err.Error())
+	for _, p := range []string{"no sim was specified", "no actions specified", "unknown option", "unrecognized option", "invalid option"} {
+		if strings.Contains(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // SMS is one message with panel-local read state.

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"uz801d/internal/netutil"
-	"uz801d/internal/parse"
-	"uz801d/internal/state"
+	"msm8916d/internal/netutil"
+	"msm8916d/internal/parse"
+	"msm8916d/internal/state"
 )
 
 var (
