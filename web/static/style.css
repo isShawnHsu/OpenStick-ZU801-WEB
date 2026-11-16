@@ -584,3 +584,40 @@ td.row-actions button { margin-left: 4px; }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* frpc TOML editor (CodeMirror) */
+.CodeMirror {
+  height: 74vh;
+  min-height: 560px;
+  border-radius: 10px;
+  font-size: 13px;
+  border: 1px solid var(--line, #26324a);
+}
+.CodeMirror-scroll { min-height: 74vh; }
+textarea[name="frpc_raw"] {
+  height: 74vh;
+  min-height: 560px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* wide modal (VPN raw JSON editor) */
+.modal-wide { width: min(96vw, 1080px); max-width: 1080px; }
+.modal-wide .btn-row.top { margin: 0 0 16px; }
+.modal-wide .CodeMirror + p,
+.modal-wide textarea + p { margin-top: 12px; }
+.modal-wide .CodeMirror {
+  height: 62vh;
+  min-height: 380px;
+  border-radius: 10px;
+  font-size: 13px;
+  border: 1px solid var(--line, #26324a);
+}
+.modal-wide textarea[name="vpn_raw"] {
+  height: 62vh;
+  min-height: 380px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* VPN 测试代理的结果：和上面的按钮行拉开距离，没有结果时不占位 */
+.status-line[data-role="vpn-test"] { margin-top: 14px; }
+.status-line[data-role="vpn-test"]:empty { display: none; }

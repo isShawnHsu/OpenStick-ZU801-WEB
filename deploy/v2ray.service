@@ -1,0 +1,16 @@
+[Unit]
+Description=v2ray client (managed by MSM8916 Manager)
+Documentation=https://www.v2ray.com/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/v2ray-run.sh /etc/v2ray/config.json
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

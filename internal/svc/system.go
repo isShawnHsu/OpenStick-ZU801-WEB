@@ -231,6 +231,96 @@ func (m *Manager) Logs(ctx context.Context, lines int, unit string) (string, err
 	return "", fmt.Errorf("无法读取系统日志（未安装 journalctl 且没有 syslog）")
 }
 
+// FrpcStatus is the frpc page payload.
+type FrpcStatus struct {
+	Active     bool   `json:"active"`
+	Enabled    bool   `json:"enabled"`
+	Version    string `json:"version"`
+	Binary     string `json:"binary"`
+	ConfigPath string `json:"config_path"`
+	LogPath    string `json:"log_path"`
+}
+
+// FrpcStatus collects the frpc service state for the dedicated page.
+func (m *Manager) FrpcStatus(ctx context.Context) *FrpcStatus {
+	cfg := m.Config().System
+	st := &FrpcStatus{
+		Active:     m.unitActive(ctx, "frpc"),
+		Enabled:    m.unitEnabled(ctx, "frpc"),
+		Binary:     frpcBinary(),
+		ConfigPath: cfg.FrpcConfigPath,
+		LogPath:    cfg.FrpcLogPath,
+	}
+	if st.Binary != "" {
+		if out := m.RunTry(ctx, 5*time.Second, st.Binary, "--version"); out != "" {
+			st.Version = strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
+		}
+	}
+	return st
+}
+
+// frpcBinary locates the frpc executable.
+func frpcBinary() string {
+	for _, p := range []string{"/usr/local/bin/frpc", "/usr/bin/frpc"} {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// FrpcRawConfig returns the TOML currently used by frpc.
+func (m *Manager) FrpcRawConfig() (string, error) {
+	path := m.Config().System.FrpcConfigPath
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("读取 frpc 配置失败: %w", err)
+	}
+	return string(data), nil
+}
+
+// SaveFrpcRawConfig validates the TOML with "frpc verify" and installs it.
+// A running client is restarted so the change takes effect immediately.
+func (m *Manager) SaveFrpcRawConfig(ctx context.Context, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("配置内容为空")
+	}
+	bin := frpcBinary()
+	if bin == "" {
+		return fmt.Errorf("未找到 frpc 程序，无法校验配置")
+	}
+	path := m.Config().System.FrpcConfigPath
+	tmp, err := os.CreateTemp("", "msm8916-frpc-*.toml")
+	if err != nil {
+		return fmt.Errorf("创建临时文件失败: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.WriteString(text); err != nil {
+		tmp.Close()
+		return err
+	}
+	tmp.Close()
+	if _, err := m.Run(ctx, 20*time.Second, bin, "verify", "-c", tmpName); err != nil {
+		return fmt.Errorf("配置校验未通过: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		return fmt.Errorf("写入配置失败: %w", err)
+	}
+	if m.unitActive(ctx, "frpc") {
+		if _, err := m.Run(ctx, 30*time.Second, "systemctl", "restart", "frpc"); err != nil {
+			return fmt.Errorf("配置已保存，但重启 frpc 失败: %w", err)
+		}
+	}
+	return nil
+}
+
 // SetFrpcLogPath stores the path of the frpc log file shown on the system page.
 func (m *Manager) SetFrpcLogPath(path string) error {
 	path = strings.TrimSpace(path)

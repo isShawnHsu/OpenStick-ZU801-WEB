@@ -21,6 +21,7 @@ type State struct {
 	Traffic    TrafficState           `json:"traffic"`
 	SMSRead    map[string]int64       `json:"sms_read"`
 	SMSForward SMSForwardState        `json:"sms_forward"`
+	VPN        VPNState               `json:"vpn"`
 	Clients    map[string]ClientEntry `json:"clients"`
 	Blocked    []string               `json:"blocked_macs"`
 	// QuotaBlockedPeriod marks the billing period whose quota is exhausted.
@@ -47,6 +48,36 @@ type SMSForwardState struct {
 	Primed bool `json:"primed,omitempty"`
 	// Sent maps a message fingerprint to the Unix time it was forwarded.
 	Sent map[string]int64 `json:"sent,omitempty"`
+}
+
+// VPNState holds the imported proxy nodes and which one is active.
+type VPNState struct {
+	Nodes    []VPNNode `json:"nodes,omitempty"`
+	ActiveID string    `json:"active_id,omitempty"`
+}
+
+// VPNNode is one imported vmess/vless endpoint.
+type VPNNode struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	UUID     string `json:"uuid"`
+	AlterID  int    `json:"alter_id,omitempty"`
+	Security string `json:"security,omitempty"`
+	Network  string `json:"network,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Host     string `json:"host,omitempty"`
+	TLS      bool   `json:"tls,omitempty"`
+	SNI      string `json:"sni,omitempty"`
+	Flow     string `json:"flow,omitempty"`
+	// Reality is VLESS+TLS without a real certificate: the server is identified
+	// by a public key instead of a CA chain.
+	RealityPublicKey string `json:"reality_pbk,omitempty"`
+	RealityShortID   string `json:"reality_sid,omitempty"`
+	RealitySpiderX   string `json:"reality_spider_x,omitempty"`
+	AddedAt          int64  `json:"added_at,omitempty"`
 }
 
 // TrafficState stores cumulative counters and the last raw kernel counters.
@@ -312,6 +343,8 @@ func clone(in *State) *State {
 	}
 	out.Blocked = make([]string, len(in.Blocked))
 	copy(out.Blocked, in.Blocked)
+	out.VPN.Nodes = make([]VPNNode, len(in.VPN.Nodes))
+	copy(out.VPN.Nodes, in.VPN.Nodes)
 	out.Traffic.Days = make(map[string]TrafficBucket, len(in.Traffic.Days))
 	for k, v := range in.Traffic.Days {
 		out.Traffic.Days[k] = v

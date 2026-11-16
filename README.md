@@ -74,7 +74,8 @@ nftables 和 systemd，提供蜂窝网络、APN、短信、Wi-Fi 热点、客户
 | 客户端 | 在线/离线、信号、收发流量、备注、拉黑（nftables MAC 过滤）、清除离线记录 |
 | 局域网 | 路由器 IP、子网掩码、DHCP 范围、DNS、租期 |
 | 流量 | 按账期（月）统计，保留最近 36 个月历史，当前账期按日细分，实时速率、配额与超限断网 |
-| 系统 | 设备信息、系统日志、可配置路径的 FRPC 日志、LED 控制（完全关闭或夜间定时熄灭）、Ping/DNS 诊断、改密、会话时长、重启/关机/恢复出厂 |
+| VPN | 导入 vmess / vless / trojan / ss 分享链接生成 v2ray 配置，SOCKS5 + HTTP 代理端口，服务启停与日志 |
+| 系统 | 设备信息、系统日志、可配置路径的 FRPC 日志、FRPC 重启、LED 控制（完全关闭或夜间定时熄灭）、Ping/DNS 诊断、改密、会话时长、重启/关机/恢复出厂 |
 
 ---
 
@@ -462,6 +463,38 @@ LTE 上收发短信需要 **CS 域（SGs）或 IMS**。如果模块/卡是纯数
 > 不用 `qmicli --wds-get-packet-statistics` 是因为 bam-dmux 的 QMI 端点只允许一个客户端，
 > 采样会把 ModemManager 踢下线（表现为模块反复重新枚举）。
 
+### VPN（v2ray）
+
+思路和 OpenWrt 的 `luci-app-v2ray` 一致：**粘贴分享链接 → 生成 v2ray 客户端配置 → 起服务**。
+
+- 支持 `vmess://`、`vless://`、`trojan://`、`ss://` 四种分享链接，自动解析协议、地址、端口、
+  UUID/密码、传输方式（tcp/ws/grpc/h2）、TLS、SNI、path、host。
+- 节点存在 `/var/lib/msm8916d/state.json` 里，页面只显示打码后的凭据（`abcd…ef`）。
+- 选中节点后立即生成 `/etc/v2ray/config.json` 并重启服务。
+- 配置里固定生成两个入站：**SOCKS5**（默认 1080，含 UDP）和 **HTTP**（默认 1081），
+  出站是当前节点 + `direct` + `block`，并对 `geoip:private` 直连。
+- 「允许局域网设备使用」打开时监听 `0.0.0.0`，热点/USB 客户端可以直接把代理指向
+  `192.168.69.1:1080`（热点）或 `192.168.68.1:1080`（USB）；关闭则只监听 `127.0.0.1`。
+
+**前置条件**：设备上要有 v2ray 或 xray 可执行文件，并配好 systemd 单元：
+
+```sh
+# 1) 放二进制（arm64）
+install -m 0755 v2ray /usr/local/bin/v2ray
+
+# 2) 安装启动脚本与单元
+install -m 0755 deploy/v2ray-run.sh /usr/local/sbin/v2ray-run.sh
+install -m 0644 deploy/v2ray.service /etc/systemd/system/v2ray.service
+systemctl daemon-reload
+systemctl enable v2ray        # 不用 --now，先在网页里选好节点
+```
+
+`v2ray-run.sh` 会自动区分 v2ray 4.x（`-config`）和 v2ray 5.x / xray（`run -c`），
+所以换二进制不用改单元。
+
+> 目前只提供 SOCKS5/HTTP 代理端口。**整机 / 热点透明代理**（`iptables REDIRECT` +
+> `tproxy`）还没做——它会把设备流量全局改道，风险更高，等这部分单独验证后再加。
+
 ### 系统与诊断
 
 - 查看设备信息、系统日志；
@@ -829,6 +862,7 @@ Windows 下预览界面与 API：
 | GET/POST | `/api/clients`、`/api/clients/block`、`/api/clients/unblock`、`/api/clients/rename`、`/api/clients/forget` | 客户端 |
 | GET/POST | `/api/lan` | 局域网 / DHCP |
 | GET/POST | `/api/traffic`、`/api/traffic/reset`、`/api/traffic/lifetime`、`/api/traffic/unblock` | 流量 |
+| GET/POST | `/api/vpn`、`/api/vpn/node`、`/api/vpn/node/delete`、`/api/vpn/node/select`、`/api/vpn/control`、`/api/vpn/config`、`/api/vpn/logs` | VPN（v2ray） |
 | GET/POST | `/api/system`、`/api/system/logs`、`/api/system/frpc-log`、`/api/system/leds`、`/api/system/led`、`/api/system/led-control`、`/api/system/password`、`/api/system/language`、`/api/system/admin-user`、`/api/system/session-hours`、`/api/system/reboot`、`/api/system/poweroff`、`/api/system/factory-reset`、`/api/system/ping`、`/api/system/dns` | 系统 |
 | GET | `/api/config` | 导出配置（不含密码散列） |
 

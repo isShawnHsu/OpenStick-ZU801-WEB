@@ -34,7 +34,37 @@ type Config struct {
 	Data   DataConfig            `json:"data"`
 	SMS    SMSConfig             `json:"sms"`
 	System SystemConfig          `json:"system"`
+	VPN    VPNConfig             `json:"vpn"`
 	LEDs   map[string]LEDSetting `json:"leds,omitempty"`
+}
+
+// VPNConfig controls the v2ray client managed by the VPN page.
+type VPNConfig struct {
+	// Binary is the v2ray (or xray) executable.
+	Binary string `json:"binary"`
+	// ConfigPath is where the generated client config is written.
+	ConfigPath string `json:"config_path"`
+	// ServiceName is the systemd unit that runs the binary.
+	ServiceName string `json:"service_name"`
+	// SocksPort and HTTPPort are the local proxy inbounds.
+	SocksPort int `json:"socks_port"`
+	HTTPPort  int `json:"http_port"`
+	// AllowLAN makes the proxy ports reachable from the hotspot/USB clients.
+	AllowLAN bool `json:"allow_lan"`
+	// RoutingMode selects how the generated config routes traffic:
+	//   global - everything except private ranges goes through the proxy
+	//   smart  - geosite:cn / geoip:cn go direct, the rest through the proxy
+	//            (smart needs geoip.dat / geosite.dat next to GeoPath)
+	RoutingMode string `json:"routing_mode"`
+	// GeoPath is the directory holding geoip.dat / geosite.dat.
+	GeoPath string `json:"geo_path"`
+	// LogPath is the v2ray error log shown on the page.
+	LogPath string `json:"log_path"`
+	// Transparent redirects all TCP from the device and from USB/hotspot
+	// clients into v2ray, so clients need no proxy settings.
+	Transparent bool `json:"transparent"`
+	// TransparentPort is the local dokodemo-door port used by the redirect.
+	TransparentPort int `json:"transparent_port"`
 }
 
 // ModemConfig controls the cellular modem backend.
@@ -149,6 +179,8 @@ type SystemConfig struct {
 	AllowFactoryReset bool   `json:"allow_factory_reset"`
 	LogLines          int    `json:"log_lines"`
 	FrpcLogPath       string `json:"frpc_log_path"`
+	// FrpcConfigPath is the TOML file shown on the frpc page.
+	FrpcConfigPath string `json:"frpc_config_path"`
 
 	// LED power control. LEDOff always wins; the schedule only applies when
 	// LEDOff is false. Times use the device's local timezone in HH:MM form.
@@ -236,6 +268,18 @@ func Default() *Config {
 			LogLines:          200,
 			LEDOffTime:        "22:00",
 			LEDOnTime:         "07:00",
+		},
+		VPN: VPNConfig{
+			Binary:      "/usr/local/bin/v2ray",
+			ConfigPath:  "/etc/v2ray/config.json",
+			ServiceName: "v2ray",
+			SocksPort:   1080,
+			HTTPPort:    1081,
+			AllowLAN:    true,
+			RoutingMode: "smart",
+			GeoPath:     "/usr/lib/v2ray",
+			LogPath:     "/var/log/v2ray/error.log",
+			TransparentPort: 12345,
 		},
 		LEDs: map[string]LEDSetting{},
 	}
@@ -420,11 +464,55 @@ func (c *Config) Normalize() {
 		c.System.LogLines = 200
 	}
 	c.System.FrpcLogPath = strings.TrimSpace(c.System.FrpcLogPath)
+	c.System.FrpcConfigPath = strings.TrimSpace(c.System.FrpcConfigPath)
+	if c.System.FrpcConfigPath == "" {
+		c.System.FrpcConfigPath = "/etc/frp/frpc.toml"
+	}
 	c.System.LEDOffTime = normalizeClock(c.System.LEDOffTime, "22:00")
 	c.System.LEDOnTime = normalizeClock(c.System.LEDOnTime, "07:00")
+	c.VPN = normalizeVPN(c.VPN)
 	if c.LEDs == nil {
 		c.LEDs = map[string]LEDSetting{}
 	}
+}
+
+// normalizeVPN fills empty fields with the defaults so an older config file
+// gains the VPN section without a manual edit.
+func normalizeVPN(v VPNConfig) VPNConfig {
+	def := Default().VPN
+	if strings.TrimSpace(v.Binary) == "" {
+		v.Binary = def.Binary
+	}
+	if strings.TrimSpace(v.ConfigPath) == "" {
+		v.ConfigPath = def.ConfigPath
+	}
+	if strings.TrimSpace(v.ServiceName) == "" {
+		v.ServiceName = def.ServiceName
+	}
+	if v.SocksPort == 0 {
+		v.SocksPort = def.SocksPort
+	}
+	if v.HTTPPort == 0 {
+		v.HTTPPort = def.HTTPPort
+	}
+	if strings.TrimSpace(v.LogPath) == "" {
+		v.LogPath = def.LogPath
+	}
+	if v.RoutingMode != "global" && v.RoutingMode != "smart" {
+		v.RoutingMode = def.RoutingMode
+	}
+	if strings.TrimSpace(v.GeoPath) == "" {
+		v.GeoPath = def.GeoPath
+	}
+	if v.TransparentPort == 0 {
+		v.TransparentPort = def.TransparentPort
+	}
+	v.Binary = strings.TrimSpace(v.Binary)
+	v.ConfigPath = strings.TrimSpace(v.ConfigPath)
+	v.ServiceName = strings.TrimSpace(v.ServiceName)
+	v.LogPath = strings.TrimSpace(v.LogPath)
+	v.GeoPath = strings.TrimSpace(v.GeoPath)
+	return v
 }
 
 func normalizeClock(s, def string) string {
@@ -633,12 +721,74 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("FRPC 日志路径必须是绝对路径")
 		}
 	}
+	if p := c.System.FrpcConfigPath; p != "" {
+		if len(p) > 300 || strings.ContainsAny(p, "\r\n\x00") {
+			return fmt.Errorf("FRPC 配置路径无效")
+		}
+		// The device is Linux: require a POSIX absolute path here instead of
+		// filepath.IsAbs, which is host-dependent and rejects "/etc/..." on
+		// Windows when the tests run there.
+		if !strings.HasPrefix(p, "/") {
+			return fmt.Errorf("FRPC 配置路径必须是绝对路径")
+		}
+	}
 	for name, led := range c.LEDs {
 		if strings.ContainsAny(name, "/\\\r\n") || len(name) > 64 {
 			return fmt.Errorf("LED 名称无效: %s", name)
 		}
 		if strings.ContainsAny(led.Trigger, "/\\\r\n") || len(led.Trigger) > 64 {
 			return fmt.Errorf("LED 触发器无效: %s", led.Trigger)
+		}
+	}
+
+	if v := c.VPN; true {
+		if len(v.Binary) > 300 || strings.ContainsAny(v.Binary, "\r\n\x00") {
+			return fmt.Errorf("VPN 程序路径无效")
+		}
+		if !strings.HasPrefix(v.Binary, "/") {
+			return fmt.Errorf("VPN 程序路径必须是绝对路径")
+		}
+		if len(v.ConfigPath) > 300 || strings.ContainsAny(v.ConfigPath, "\r\n\x00") {
+			return fmt.Errorf("VPN 配置路径无效")
+		}
+		if !strings.HasPrefix(v.ConfigPath, "/") {
+			return fmt.Errorf("VPN 配置路径必须是绝对路径")
+		}
+		if len(v.LogPath) > 300 || strings.ContainsAny(v.LogPath, "\r\n\x00") {
+			return fmt.Errorf("VPN 日志路径无效")
+		}
+		if !strings.HasPrefix(v.LogPath, "/") {
+			return fmt.Errorf("VPN 日志路径必须是绝对路径")
+		}
+		if !ifaceRe.MatchString(v.ServiceName) {
+			return fmt.Errorf("VPN 服务名无效")
+		}
+		if v.SocksPort < 1 || v.SocksPort > 65535 {
+			return fmt.Errorf("VPN SOCKS 端口必须在 1-65535 之间")
+		}
+		if v.HTTPPort < 1 || v.HTTPPort > 65535 {
+			return fmt.Errorf("VPN HTTP 端口必须在 1-65535 之间")
+		}
+		if v.SocksPort == v.HTTPPort {
+			return fmt.Errorf("VPN SOCKS 和 HTTP 端口不能相同")
+		}
+		if v.SocksPort == 80 || v.HTTPPort == 80 {
+			return fmt.Errorf("VPN 端口不能占用管理页面的 80")
+		}
+		if v.RoutingMode != "global" && v.RoutingMode != "smart" {
+			return fmt.Errorf("VPN 分流模式只能是 global 或 smart")
+		}
+		if v.TransparentPort < 1 || v.TransparentPort > 65535 {
+			return fmt.Errorf("VPN 透明代理端口必须在 1-65535 之间")
+		}
+		if v.TransparentPort == v.SocksPort || v.TransparentPort == v.HTTPPort || v.TransparentPort == 80 {
+			return fmt.Errorf("VPN 透明代理端口不能和代理端口/管理页面冲突")
+		}
+		if len(v.GeoPath) > 300 || strings.ContainsAny(v.GeoPath, "\r\n\x00") {
+			return fmt.Errorf("VPN geo 文件目录无效")
+		}
+		if !strings.HasPrefix(v.GeoPath, "/") {
+			return fmt.Errorf("VPN geo 文件目录必须是绝对路径")
 		}
 	}
 	return nil

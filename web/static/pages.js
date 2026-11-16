@@ -224,12 +224,13 @@ function networkView(net) {
     card(t('net.tools'),
       '<div class="tools-grid">' +
       '<form data-form="ping" class="stack">' +
-      field(t('net.target'), '<input type="text" name="host" value="' + attr(state.cache.pingHost || DEFAULT_PING_HOST) + '" placeholder="www.baidu.com" required>') +
-      '<button class="primary" type="submit">' + esc(t('net.ping')) + '</button></form>' +
+      '<input type="hidden" name="host" value="' + attr(DEFAULT_PING_HOST) + '">' +
+      '<button class="primary" type="submit">' + esc(t('net.ping')) + ' ' + esc(DEFAULT_PING_HOST) + '</button></form>' +
       '<form data-form="dns" class="stack">' +
-      field(t('net.target'), '<input type="text" name="host" value="' + attr(state.cache.dnsHost || '') + '" placeholder="example.com" required>') +
-      '<button class="primary" type="submit">' + esc(t('net.dnsLookup')) + '</button></form>' +
+      '<input type="hidden" name="host" value="' + attr(DEFAULT_DNS_HOST) + '">' +
+      '<button class="primary" type="submit">' + esc(t('net.dnsLookup')) + ' ' + esc(DEFAULT_DNS_HOST) + '</button></form>' +
       '</div>' +
+      '<p class="muted small">' + esc(t('net.pingNote')) + '</p>' +
       '<h3>' + esc(t('net.output')) + '</h3><pre class="logs">' + esc(out || t('net.noOutput')) + '</pre>');
 }
 
@@ -706,6 +707,363 @@ function trafficView(st) {
       '<button class="danger" type="button" data-action="traffic-lifetime">' + esc(t('traffic.resetLifetime')) + '</button></div></form>');
 }
 
+/* ---------------------------------------------------------------- vpn */
+
+// vpnNodeSync shows the fields the selected protocol/transport actually needs,
+// mirroring the v2rayN "add server" dialog.
+function vpnNodeSync(el) {
+  var form = el && el.closest ? el.closest('form[data-form="vpn-node-manual"]') : null;
+  if (!form) return;
+  var protoEl = form.querySelector('[name="protocol"]');
+  var netEl = form.querySelector('[name="network"]');
+  var proto = protoEl ? protoEl.value : 'vmess';
+  var net = netEl ? netEl.value : 'ws';
+  var nodes = form.querySelectorAll('[data-show]');
+  for (var i = 0; i < nodes.length; i++) {
+    var want = (nodes[i].getAttribute('data-show') || '').split(',');
+    nodes[i].style.display = (want.indexOf(proto) >= 0 || want.indexOf(net) >= 0) ? '' : 'none';
+  }
+  var cred = form.querySelector('[data-cred-label]');
+  if (cred) {
+    cred.textContent = (proto === 'trojan' || proto === 'ss') ? t('vpn.password') : t('vpn.userId');
+  }
+}
+
+function initVPNForms(root) {
+  var form = root ? root.querySelector('form[data-form="vpn-node-manual"]') : null;
+
+  // If a geo sync is still running (page reloaded), keep showing its progress.
+  api('/api/vpn/geo/status').then(function (st) {
+    if (st && st.running) {
+      applyVPNGeoState(st);
+      pollVPNGeo();
+    }
+  }).catch(function () { });
+
+  if (!form) return;
+  var proto = form.querySelector('[name="protocol"]');
+  if (proto) vpnNodeSync(proto);
+
+  // Echo the active config into the empty form so address/UUID are visible
+  // without clicking "fill from active config".
+  var addr = form.querySelector('[name="address"]');
+  if (addr && !addr.value) {
+    api('/api/vpn/raw').then(function (res) {
+      if (!form.isConnected) return;
+      var a = form.querySelector('[name="address"]');
+      if (a && !a.value) vpnFillForm(res.config || '');
+    }).catch(function () { /* keep the form empty */ });
+  }
+}
+
+// vpnApplyNodeToForm writes a node object into the manual form.
+function vpnApplyNodeToForm(node) {
+  var form = document.querySelector('form[data-form="vpn-node-manual"]');
+  if (!form || !node) return false;
+
+  function set(name, value) {
+    var el = form.querySelector('[name="' + name + '"]');
+    if (el && value !== undefined && value !== null) el.value = value;
+  }
+  function setSel(name, value) {
+    var el = form.querySelector('[name="' + name + '"]');
+    if (!el || !value) return;
+    for (var k = 0; k < el.options.length; k++) {
+      if (el.options[k].value === String(value)) { el.value = String(value); return; }
+    }
+  }
+
+  setSel('protocol', String(node.protocol || 'vmess').toLowerCase());
+  setSel('network', node.network || 'tcp');
+  set('address', node.address || '');
+  set('port', node.port || '');
+  set('uuid', node.uuid || '');
+  set('sni', node.sni || '');
+  set('path', node.path || '');
+  set('host', node.host || '');
+  set('service_name', node.network === 'grpc' ? (node.path || '') : '');
+  set('alter_id', node.alter_id || 0);
+  set('flow', node.flow || '');
+  setSel('security', node.security || 'auto');
+  setSel('method', node.security || 'aes-256-gcm');
+  set('reality_pbk', node.reality_pbk || '');
+  set('reality_sid', node.reality_sid || '');
+  var tlsBox = form.querySelector('[name="tls"]');
+  if (tlsBox) tlsBox.checked = !!node.tls;
+
+  var proto = form.querySelector('[name="protocol"]');
+  if (proto) vpnNodeSync(proto);
+  return true;
+}
+
+// vpnFillForm copies the active config's proxy outbound into the manual form.
+function vpnFillForm(text) {
+  if (!text) return false;
+  var doc;
+  try { doc = JSON.parse(text); } catch (e) { return false; }
+  var list = doc.outbounds || [];
+  var ob = null;
+  for (var i = 0; i < list.length; i++) {
+    var p = String(list[i].protocol || '').toLowerCase();
+    if (p && p !== 'freedom' && p !== 'blackhole') { ob = list[i]; break; }
+  }
+  if (!ob) return false;
+
+  var stream = ob.streamSettings || {};
+  var settings = ob.settings || {};
+  var node = {
+    protocol: String(ob.protocol || 'vmess').toLowerCase(),
+    network: stream.network || 'tcp',
+    tls: stream.security === 'tls' || stream.security === 'reality',
+    sni: (stream.tlsSettings && stream.tlsSettings.serverName) ||
+         (stream.realitySettings && stream.realitySettings.serverName) || '',
+    path: (stream.wsSettings && stream.wsSettings.path) ||
+          (stream.httpSettings && stream.httpSettings.path) ||
+          (stream.grpcSettings && stream.grpcSettings.serviceName) || '',
+    host: (stream.wsSettings && ((stream.wsSettings.headers && stream.wsSettings.headers.Host) || stream.wsSettings.host)) || ''
+  };
+  if (stream.realitySettings) {
+    node.reality_pbk = stream.realitySettings.publicKey || '';
+    node.reality_sid = stream.realitySettings.shortId || '';
+  }
+  if (settings.vnext && settings.vnext.length) {
+    var vnext = settings.vnext[0];
+    var user = (vnext.users && vnext.users[0]) || {};
+    node.address = vnext.address || '';
+    node.port = vnext.port || '';
+    node.uuid = user.id || '';
+    node.alter_id = user.alterId || 0;
+    node.flow = user.flow || '';
+    node.security = user.security || 'auto';
+  } else if (settings.servers && settings.servers.length) {
+    var server = settings.servers[0];
+    node.address = server.address || '';
+    node.port = server.port || '';
+    node.uuid = server.password || '';
+    node.security = server.method || '';
+  }
+  return vpnApplyNodeToForm(node);
+}
+
+function vpnView(st) {
+  var nodes = st.nodes || [];
+  var live = st.live || null;
+  var o = live && live.valid ? live.outbound : null;
+
+  var curLine = o
+    ? (o.protocol || '').toUpperCase() + ' · ' + (o.address || '') + ':' + (o.port || '') +
+      (o.network && o.network !== 'tcp' ? ' · ' + o.network : '') +
+      (o.security ? ' · ' + o.security : '')
+    : t('vpn.liveDirect');
+
+  var rows = nodes.map(function (n) {
+    var meta = (n.protocol || '').toUpperCase() + ' · ' + n.address + ':' + n.port +
+      (n.tls ? ' · TLS' : '') + (n.network && n.network !== 'tcp' ? ' · ' + n.network : '');
+    var actions;
+    if (n.from_config) {
+      actions = '<button class="small primary" type="button" data-action="vpn-adopt">' + esc(t('vpn.adopt')) + '</button>';
+    } else {
+      actions = (n.active ? '' : '<button class="small ghost" type="button" data-action="vpn-select" data-id="' + attr(n.id) + '">' + esc(t('vpn.use')) + '</button>') +
+        '<button class="small ghost" type="button" data-action="vpn-edit" data-id="' + attr(n.id) + '">' + esc(t('common.edit')) + '</button>' +
+        '<button class="small danger" type="button" data-action="vpn-delete" data-id="' + attr(n.id) + '">' + esc(t('common.delete')) + '</button>';
+    }
+    return '<tr class="' + (n.active ? 'online' : '') + '">' +
+      '<td><strong>' + esc(n.name || (n.address + ':' + n.port)) + '</strong>' +
+        (n.active ? ' ' + pill(t('vpn.current'), 'ok') : '') +
+        '<div class="muted small">' + esc(meta) + '</div></td>' +
+      '<td><code class="small">' + esc(n.secret || '-') + '</code></td>' +
+      '<td class="row-actions">' + actions + '</td></tr>';
+  }).join('');
+
+  var logs = state.cache.vpnLogs || '';
+
+  return pageHead(t('vpn.title'), '', '<button class="ghost" data-action="reload">' + esc(t('common.refresh')) + '</button>') +
+    (st.installed ? '' : '<div class="note warn">' + esc(t('vpn.installHint')) + '</div>') +
+
+    card(t('vpn.status'),
+      '<div class="status-line">' +
+      (st.active ? pill(t('vpn.running'), 'ok') : pill(t('vpn.stopped'), 'bad')) +
+      '<strong>' + esc(curLine) + '</strong>' +
+      (o && o.sni ? '<span class="muted small">SNI ' + esc(o.sni) + (o.path ? ' · ' + esc(o.path) : '') + '</span>' : '') +
+      (live && live.smart ? '<span class="muted small">' + esc(t('vpn.routingSmart')) + ' · ' + esc(live.rule_count || 0) + ' ' + esc(t('vpn.rules')) + '</span>' : '') +
+      '</div>' +
+      '<div class="btn-row">' +
+      (st.active ? '' :
+        '<button class="primary" type="button" data-action="vpn-control" data-act="start"' + (st.installed ? '' : ' disabled') + '>' + esc(t('vpn.start')) + '</button>') +
+      '<button class="ghost" type="button" data-action="vpn-control" data-act="restart">' + esc(t('vpn.restart')) + '</button>' +
+      '<button class="ghost" type="button" data-action="vpn-certfix">' + esc(t('vpn.certFix')) + '</button>' +
+      '<button class="ghost" type="button" data-action="vpn-test">' + esc(t('vpn.testProxy')) + '</button>' +
+      (st.active ? '<button class="danger" type="button" data-action="vpn-control" data-act="stop">' + esc(t('vpn.stop')) + '</button>' : '') +
+      '<button class="ghost" type="button" data-action="vpn-geo-sync">' + esc(t('vpn.geoSync')) + '</button>' +
+      '</div>' +
+      '<div class="muted small" data-role="vpn-geo-status"></div>' +
+      '<div class="status-line" data-role="vpn-test"></div>' +
+      '<pre class="logs" data-role="vpn-geo-logs" style="display:none"></pre>') +
+
+    card(t('vpn.nodes'),
+      (rows
+        ? '<div class="table-wrap"><table><thead><tr><th>' + esc(t('vpn.node')) + '</th><th>' + esc(t('vpn.secret')) + '</th><th class="row-actions">' + esc(t('common.actions')) + '</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        : '<p class="muted">' + esc(t('vpn.noNodes')) + '</p>'),
+      '<button class="primary small" type="button" data-action="vpn-add">' + esc(t('vpn.addNode')) + '</button>') +
+
+    card(t('vpn.settings'),
+      '<form data-form="vpn" class="stack">' +
+      '<div class="form-grid">' +
+      field(t('vpn.routingMode'), sel('routing_mode', st.routing_mode || 'smart', [['smart', t('vpn.routingSmart')], ['global', t('vpn.routingGlobal')]])) +
+      field(t('vpn.socksPort'), '<input type="number" name="socks_port" min="1" max="65535" value="' + attr(st.socks_port || 1080) + '">') +
+      field(t('vpn.httpPort'), '<input type="number" name="http_port" min="1" max="65535" value="' + attr(st.http_port || 1081) + '">') +
+      '</div>' + check('allow_lan', st.allow_lan, t('vpn.allowLan')) +
+      (st.allow_lan ? '<div class="note warn">' + esc(t('vpn.lanWarning')) + '</div>' : '') +
+      check('transparent', st.transparent, t('vpn.transparent')) +
+      '<div class="form-grid">' +
+      field(t('vpn.transparentPort'), '<input type="number" name="transparent_port" min="1" max="65535" value="' + attr(st.transparent_port || 12345) + '">') +
+      '</div>' +
+      (st.transparent_on ? '<div class="note">' + esc(t('vpn.transparentOn')) + '</div>' : '') +
+      '<div class="note warn">' + esc(t('vpn.transparentWarn')) + '</div>' +
+      '<p class="muted small">程序 ' + esc(st.binary || '-') +
+      ' · 配置 ' + esc(st.config_path || '-') +
+      ' · 日志 ' + esc(st.log_path || '-') + '</p>' +
+      '<div class="btn-row"><button class="primary" type="submit">' + esc(t('common.save')) + '</button></div></form>') +
+
+    card(t('vpn.logs'),
+      '<div class="btn-row">' +
+      '<button class="ghost" type="button" data-action="vpn-logs">' + esc(t('system.loadLogs')) + '</button>' +
+      '<button class="ghost" type="button" data-action="vpn-raw-open">' + esc(t('vpn.rawConfig')) + '</button>' +
+      '</div>' +
+      '<pre class="logs">' + esc(logs || t('vpn.logsEmpty')) + '</pre>');
+}
+
+// vpnNodeForm renders the manual node form (shown inside the add/edit dialog).
+function vpnNodeForm(n) {
+  n = n || {};
+  function val(name, def) {
+    var v = n[name];
+    return v === undefined || v === null || v === '' ? def : v;
+  }
+  var proto = String(n.protocol || 'vmess').toLowerCase();
+  var protoOptions = ['vmess', 'vless', 'trojan', 'ss'].map(function (p) {
+    return '<option value="' + p + '"' + (p === proto ? ' selected' : '') + '>' + p.toUpperCase() + '</option>';
+  }).join('');
+  var netCur = n.network || 'ws';
+  var netOptions = [['ws', 'WebSocket'], ['tcp', 'TCP'], ['grpc', 'gRPC'], ['h2', 'HTTP/2']].map(function (p) {
+    return '<option value="' + p[0] + '"' + (p[0] === netCur ? ' selected' : '') + '>' + p[1] + '</option>';
+  }).join('');
+
+  return '<form data-form="vpn-node-manual" class="stack">' +
+    '<div class="form-grid">' +
+    field(t('vpn.protocol'), '<select name="protocol" onchange="vpnNodeSync(this)">' + protoOptions + '</select>') +
+    field(t('vpn.address'), txt('address', val('address', ''), 'example.com')) +
+    field(t('vpn.port'), '<input type="number" name="port" min="1" max="65535" value="' + attr(val('port', '')) + '">') +
+    '<label class="field"><span data-cred-label>' + esc(t('vpn.userId')) + '</span>' +
+    '<input type="text" name="uuid" value="' + attr(val('uuid', '')) + '"></label>' +
+    field(t('vpn.transport'), '<select name="network" onchange="vpnNodeSync(this)">' + netOptions + '</select>') +
+    '</div>' +
+    '<div data-show="ss">' + field(t('vpn.method'),
+      '<select name="method"><option>aes-256-gcm</option><option>aes-128-gcm</option>' +
+      '<option>chacha20-poly1305</option><option>none</option></select>') + '</div>' +
+    check('tls', n.tls !== false, t('vpn.tls')) +
+    '<div class="form-grid">' +
+    '<div data-show="vmess">' + field(t('vpn.alterId'), '<input type="number" name="alter_id" min="0" max="65535" value="' + attr(val('alter_id', 0)) + '">') + '</div>' +
+    '<div data-show="vmess">' + field(t('vpn.encryption'),
+      '<select name="security"><option>auto</option><option>none</option>' +
+      '<option>aes-128-gcm</option><option>chacha20-poly1305</option></select>') + '</div>' +
+    '<div data-show="vless">' + field(t('vpn.flow'), txt('flow', val('flow', ''), 'xtls-rprx-vision')) + '</div>' +
+    '<div data-show="vless">' + field(t('vpn.realityPbk'), txt('reality_pbk', val('reality_pbk', ''), '')) + '</div>' +
+    '<div data-show="vless">' + field(t('vpn.realitySid'), txt('reality_sid', val('reality_sid', ''), '')) + '</div>' +
+    field(t('vpn.sni'), txt('sni', val('sni', ''), 'example.com')) +
+    '<div data-show="ws">' + field(t('vpn.wsPath'), txt('path', val('path', ''), '/ws')) + '</div>' +
+    '<div data-show="ws">' + field(t('vpn.wsHost'), txt('host', val('host', ''), 'example.com')) + '</div>' +
+    '<div data-show="grpc">' + field(t('vpn.grpcService'), txt('service_name', n.network === 'grpc' ? val('path', '') : '', '')) + '</div>' +
+    '</div>' +
+    '<div class="btn-row">' +
+    '<button class="primary" type="submit" data-role="vpn-node-submit">' + esc(n.id ? t('vpn.saveEdit') : t('vpn.addManual')) + '</button>' +
+    '<button class="ghost" type="button" data-action="modal-close">' + esc(t('common.cancel')) + '</button>' +
+    '</div></form>';
+}
+
+// vpnNodeModal opens the add/edit dialog: share-link tab + manual tab.
+function vpnNodeModal(node) {
+  var editing = !!(node && node.id);
+  state.cache.vpnEditing = editing ? node.id : '';
+  state.cache.vpnEditingName = editing ? (node.name || node.address + ':' + node.port) : '';
+  var body =
+    '<div class="btn-row">' +
+    '<button class="ghost small" type="button" data-action="vpn-tab" data-tab="link">' + esc(t('vpn.tabLink')) + '</button>' +
+    '<button class="ghost small" type="button" data-action="vpn-tab" data-tab="manual">' + esc(t('vpn.tabManual')) + '</button>' +
+    '</div>' +
+    '<div data-tab-body="link"' + (editing ? ' style="display:none"' : '') + '>' +
+    '<form data-form="vpn-node" class="stack">' +
+    '<textarea name="link" rows="4" placeholder="vmess:// …  /  vless:// …  /  trojan:// …  /  ss:// …"></textarea>' +
+    '<div class="btn-row"><button class="primary" type="submit">' + esc(t('vpn.import')) + '</button>' +
+    '<button class="ghost" type="button" data-action="modal-close">' + esc(t('common.cancel')) + '</button></div>' +
+    '<p class="muted small">' + esc(t('vpn.importHint')) + '</p></form></div>' +
+    '<div data-tab-body="manual"' + (editing ? '' : ' style="display:none"') + '>' + vpnNodeForm(node) + '</div>';
+  openModal(editing ? t('vpn.editTitle') : t('vpn.addTitle'), body);
+  var form = document.querySelector('form[data-form="vpn-node-manual"]');
+  if (form) {
+    var p = form.querySelector('[name="protocol"]');
+    if (p) vpnNodeSync(p);
+  }
+}
+
+/* ---------------------------------------------------------------- frpc */
+
+// initFrpcEditor upgrades the TOML textarea to a CodeMirror editor (vendored
+// under /static/vendor/codemirror). Falls back to a plain textarea when the
+// library is missing.
+function initFrpcEditor(root) {
+  var ta = root ? root.querySelector('textarea[name="frpc_raw"]') : null;
+  if (!ta || typeof CodeMirror === "undefined") return;
+  disposeFrpcEditor();
+  state.cache.frpcEditor = CodeMirror.fromTextArea(ta, {
+    mode: "toml",
+    theme: "material-darker",
+    lineNumbers: true,
+    indentUnit: 2,
+    tabSize: 2,
+    lineWrapping: false
+  });
+}
+
+function frpcEditorValue() {
+  if (state.cache.frpcEditor) return state.cache.frpcEditor.getValue();
+  var ta = document.querySelector('#main textarea[name="frpc_raw"]');
+  return ta ? ta.value : "";
+}
+
+function disposeFrpcEditor() {
+  if (!state.cache.frpcEditor) return;
+  try { state.cache.frpcEditor.toTextArea(); } catch (e) { /* ignore */ }
+  state.cache.frpcEditor = null;
+}
+
+function frpcView(d) {
+  var st = d.status || {};
+  var cfg = d.config || '';
+  var logs = state.cache.frpcLog || '';
+  return pageHead(t('frpc.title'), '', '<button class="ghost" data-action="reload">' + esc(t('common.refresh')) + '</button>') +
+    card(t('frpc.status'),
+      '<div class="grid two">' +
+      kv(t('frpc.service'), st.active ? pill(t('vpn.running'), 'ok') : pill(t('vpn.stopped'), 'bad')) +
+      kv(t('frpc.version'), esc(st.version || '-')) +
+      kv(t('frpc.configPath'), esc(st.config_path || '-')) +
+      kv(t('frpc.logPath'), esc(st.log_path || '-')) +
+      '</div>' +
+      '<div class="btn-row">' +
+      '<button class="primary" type="button" data-action="frpc-restart">' + esc(t('frpc.restart')) + '</button>' +
+      '</div>') +
+    card(t('frpc.configTitle'),
+      '<textarea name="frpc_raw" rows="32" class="mono" spellcheck="false">' + esc(cfg) + '</textarea>' +
+      '<div class="btn-row">' +
+      '<button class="primary" type="button" data-action="frpc-config-save">' + esc(t('frpc.saveApply')) + '</button>' +
+      '<button class="ghost" type="button" data-action="frpc-config-load">' + esc(t('frpc.reload')) + '</button>' +
+      '</div>' +
+      '<p class="muted small">' + esc(t('frpc.configHint')) + '</p>') +
+    card(t('frpc.logs'),
+      '<div class="btn-row"><button class="ghost" type="button" data-action="frpc-log-load">' + esc(t('system.loadLogs')) + '</button></div>' +
+      '<pre class="logs">' + esc(logs || t('system.frpcLogEmpty')) + '</pre>');
+}
+
 /* ---------------------------------------------------------------- system */
 
 function systemView(sys, leds, ledControl) {
@@ -772,18 +1130,6 @@ function systemView(sys, leds, ledControl) {
       '<input type="number" name="log_lines" min="10" max="2000" value="' + attr(logLines) + '">' +
       '<button class="primary" data-action="logs-load">' + esc(t('system.loadLogs')) + '</button></div>' +
       '<pre class="logs">' + esc(logs || t('system.logsEmpty')) + '</pre>') +
-    card(t('system.frpcLog'),
-      '<form data-form="frpc-log" class="stack">' +
-      '<div class="form-grid">' +
-      field(t('system.frpcLogPath'), txt('frpc_log_path', sys.frpc_log_path || '', '/var/log/frpc.log')) +
-      field(t('system.lines'), '<input type="number" name="frpc_log_lines" min="10" max="2000" value="' + attr(frpcLogLines) + '">') +
-      '</div>' +
-      '<div class="btn-row"><button class="primary" type="submit">' + esc(t('system.saveAndRead')) + '</button>' +
-      '<button class="ghost" type="button" data-action="frpc-log-load">' + esc(t('system.loadLogs')) + '</button>' +
-      '<button class="ghost" type="button" data-action="frpc-restart">' + esc(t('system.frpcRestart')) + '</button></div>' +
-      '<p class="muted small">' + esc(t('system.frpcLogHint')) + '</p></form>' +
-      '<pre class="logs">' + esc(frpcLog || t('system.frpcLogEmpty')) + '</pre>',
-      pill(sys.frpc_active ? t('system.frpcRunning') : t('system.frpcStopped'), sys.frpc_active ? 'ok' : 'bad')) +
     card(t('system.leds'), ledState + ledControlForm + (ledRows
       ? '<div class="table-wrap"><table><thead><tr><th>' + esc(t('system.ledName')) + '</th><th>' + esc(t('system.trigger')) + '</th><th>' + esc(t('system.brightness')) + '</th><th class="row-actions">' + esc(t('common.actions')) + '</th></tr></thead><tbody>' + ledRows + '</tbody></table></div>'
       : '<p class="muted">' + esc(t('system.noLeds')) + '</p>')) +

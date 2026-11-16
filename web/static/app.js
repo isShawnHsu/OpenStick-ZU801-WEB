@@ -1,8 +1,9 @@
 /* MSM8916 Manager - application shell, actions and bootstrap */
-var PAGES = ['dashboard', 'network', 'cellular', 'sms', 'wifi', 'bridge', 'clients', 'lan', 'traffic', 'system'];
-// The network page pings Baidu automatically so the user has a working target
-// without typing anything. A custom target is kept until the page is reloaded.
-var DEFAULT_PING_HOST = 'www.baidu.com';
+var PAGES = ['dashboard', 'network', 'cellular', 'sms', 'wifi', 'bridge', 'clients', 'lan', 'traffic', 'vpn', 'frpc', 'system'];
+// Fixed targets for the network tools on the network page: ping runs against
+// AliDNS (ICMP without depending on DNS), the lookup resolves Baidu.
+var DEFAULT_PING_HOST = '223.5.5.5';
+var DEFAULT_DNS_HOST = 'www.baidu.com';
 
 function currentPage() {
   var raw = (location.hash || '').replace(/^#\/?/, '').split('?')[0];
@@ -69,13 +70,86 @@ function openModal(title, body) {
 }
 
 function closeModal() {
+  disposeVPNRawEditor();
   var m = document.getElementById('modal');
   if (m) m.innerHTML = '';
   document.body.classList.remove('modal-open');
 }
 
-function formObject(form) {
-  var out = {};
+// ---------------------------------------------------------------- vpn geo sync
+
+// applyVPNGeoState paints the progress line and the step log while a sync runs.
+function applyVPNGeoState(st) {
+  if (!st) return;
+  var line = document.querySelector('[data-role="vpn-geo-status"]');
+  if (line) {
+    var text = st.step || '';
+    if (st.running && st.percent) text += ' · ' + st.percent + '%';
+    if (st.error) text = t('vpn.geoFailed') + '：' + st.error;
+    line.textContent = text;
+  }
+  var pre = document.querySelector('[data-role="vpn-geo-logs"]');
+  if (pre) {
+    if (st.logs && st.logs.length) {
+      pre.style.display = '';
+      pre.textContent = st.logs.join('\n');
+    } else {
+      pre.style.display = 'none';
+    }
+  }
+}
+
+// pollVPNGeo follows the background download until it finishes.
+function pollVPNGeo() {
+  if (state.cache.vpnGeoTimer) return;
+  var tick = async function () {
+    try {
+      var st = await api('/api/vpn/geo/status');
+      applyVPNGeoState(st);
+      if (st && st.running) {
+        state.cache.vpnGeoTimer = setTimeout(tick, 1200);
+        return;
+      }
+      state.cache.vpnGeoTimer = null;
+      if (st && st.error) toast(t('vpn.geoFailed') + '：' + st.error, 'bad');
+      else toast(t('vpn.geoSynced'));
+      await refresh();
+    } catch (e) {
+      state.cache.vpnGeoTimer = null;
+    }
+  };
+  tick();
+}
+
+// ---------------------------------------------------------------- editors
+// initVPNRawEditor upgrades the full-config textarea to a JSON CodeMirror editor.
+function initVPNRawEditor() {
+  var ta = document.querySelector('textarea[name="vpn_raw"]');
+  if (!ta || typeof CodeMirror === 'undefined') return;
+  disposeVPNRawEditor();
+  state.cache.vpnRawEditor = CodeMirror.fromTextArea(ta, {
+    mode: { name: 'javascript', json: true },
+    theme: 'material-darker',
+    lineNumbers: true,
+    indentUnit: 2,
+    tabSize: 2,
+    lineWrapping: false
+  });
+}
+
+function vpnRawValue() {
+  if (state.cache.vpnRawEditor) return state.cache.vpnRawEditor.getValue();
+  var ta = document.querySelector('textarea[name="vpn_raw"]');
+  return ta ? ta.value : '';
+}
+
+function disposeVPNRawEditor() {
+  if (!state.cache.vpnRawEditor) return;
+  try { state.cache.vpnRawEditor.toTextArea(); } catch (e) { /* ignore */ }
+  state.cache.vpnRawEditor = null;
+}
+
+function formObject(form) {  var out = {};
   new FormData(form).forEach(function (v, k) { out[k] = typeof v === 'string' ? v : ''; });
   form.querySelectorAll('input[type="checkbox"]').forEach(function (c) { out[c.name] = c.checked; });
   return out;
@@ -218,9 +292,6 @@ function schedule(page) {
 }
 
 async function loadPage(page, silent) {
-  // Only auto-ping when the operator actually opens the network page, not on
-  // the 10s background refresh (which would ping every few seconds forever).
-  var enteredNetwork = page === 'network' && state.page !== 'network';
   var seq = ++state.seq;
   state.page = page;
   try {
@@ -271,6 +342,12 @@ async function loadPage(page, silent) {
       html = lanView(await api('/api/lan'));
     } else if (page === 'traffic') {
       html = trafficView(await api('/api/traffic'));
+    } else if (page === 'vpn') {
+      var vpn = await api('/api/vpn');
+      state.cache.vpn = vpn;
+      html = vpnView(vpn);
+    } else if (page === 'frpc') {
+      html = frpcView(await api('/api/frpc'));
     } else if (page === 'system') {
       var results = await Promise.all([api('/api/system'), api('/api/system/leds'), api('/api/system/led-control')]);
       state.cache.system = results[0];
@@ -285,10 +362,11 @@ async function loadPage(page, silent) {
     if (main) {
       main.innerHTML = html;
       if (page === 'sms') initSmsForwardForms(main);
+      if (page === 'vpn') initVPNForms(main);
+      if (page === 'frpc') initFrpcEditor(main); else disposeFrpcEditor();
     }
     updateChrome();
     schedule(page);
-    if (enteredNetwork) autoPing();
   } catch (e) {
     if (seq !== state.seq || e.status === 401) return;
     var main2 = document.getElementById('main');
@@ -326,13 +404,7 @@ async function runPing(host) {
   }
 }
 
-// Ping the current target (Baidu by default) when the network page opens.
-function autoPing() {
-  var host = (state.cache.pingHost || DEFAULT_PING_HOST).trim() || DEFAULT_PING_HOST;
-  runPing(host).catch(function (e) {
-    if (e.status !== 401) toast(e.message || t('common.error'), 'bad');
-  });
-}
+// (auto-ping on page entry was removed: opening the page must not start tests)
 
 async function act(btn, fn) {
   if (btn) { btn.disabled = true; btn.classList.add('busy'); }
@@ -734,6 +806,24 @@ async function handleAction(el) {
         await refresh();
       });
       return;
+    case 'frpc-config-load':
+      await act(el, async function () {
+        state.cache.frpcLog = state.cache.frpcLog || '';
+        await refresh();
+        toast(t('frpc.reloaded'));
+      });
+      return;
+    case 'frpc-config-save':
+      await act(el, async function () {
+        var text = frpcEditorValue();
+        if (!text.trim()) { toast(t('frpc.emptyConfig'), 'bad'); return; }
+        if (!confirmBox(t('frpc.saveConfirm'))) return;
+        toast(t('common.working'));
+        await api('/api/frpc/config', { method: 'POST', body: { config: text } });
+        toast(t('frpc.saved'));
+        await refresh();
+      });
+      return;
     case 'frpc-restart':
       await act(el, async function () {
         if (!confirmBox(t('system.frpcRestartConfirm'))) return;
@@ -741,6 +831,165 @@ async function handleAction(el) {
         toast(t('system.frpcRestarted'));
         // Reload the log so a client that fails to start explains itself right away.
         await readFrpcLog(state.cache.frpcLogLines || 200);
+        await refresh();
+      });
+      return;
+    case 'vpn-control':
+      await act(el, async function () {
+        var act = el.dataset.act || 'restart';
+        if (act === 'stop' && !confirmBox(t('vpn.stopConfirm'))) return;
+        toast(t('common.working'));
+        await api('/api/vpn/control', { method: 'POST', body: { action: act } });
+        toast(t('vpn.controlDone'));
+        await refresh();
+      });
+      return;
+    case 'vpn-certfix':
+      await act(el, async function () {
+        toast(t('vpn.certFixing'));
+        var res = await api('/api/vpn/certfix', { method: 'POST', body: {} });
+        var r = res.result || {};
+        if (res.error) {
+          toast(res.error, 'bad');
+        } else {
+          toast(r.message || t('vpn.certFixed'));
+        }
+        if (res.status) state.cache.vpn = res.status;
+        await refresh();
+        if (r.installed && r.installed.length) {
+          setToolOutput(r.message + '\n\n' + r.installed.join('\n'));
+        }
+      });
+      return;
+    case 'vpn-test':
+      await act(el, async function () {
+        var box = document.querySelector('[data-role="vpn-test"]');
+        if (box) box.innerHTML = '<span class="muted small">' + esc(t('vpn.testing')) + '</span>';
+        toast(t('vpn.testing'));
+        var r = await api('/api/vpn/test', { method: 'POST', body: {} });
+        if (box) {
+          var html = r.ok
+            ? pill(t('vpn.testOk'), 'ok') + ' ' + esc(t('vpn.exitIP')) + ' <strong>' + esc(r.exit_ip || '-') + '</strong>' +
+              (r.country ? ' (' + esc(r.country) + ')' : '') +
+              ' · ' + esc(r.via || '') + ' ' + (r.latency_ms || 0) + ' ms'
+            : pill(t('vpn.testFail'), 'bad') + ' ' + esc(r.error || '');
+          html += ' <span class="muted small">· ' + esc(t('vpn.localNet')) + ' ' +
+            (r.direct_ok ? pill(t('vpn.ok'), 'ok') + ' ' + (r.direct_ms || 0) + ' ms' : pill(t('vpn.testFail'), 'bad')) + '</span>';
+          box.innerHTML = html;
+        }
+        if (r.ok) toast(t('vpn.testOk') + ' ' + (r.exit_ip || ''));
+        else toast(t('vpn.testFail') + '：' + (r.error || ''), 'bad');
+      });
+      return;
+    case 'vpn-select':
+      await act(el, async function () {
+        toast(t('common.working'));
+        await api('/api/vpn/node/select', { method: 'POST', body: { id: el.dataset.id } });
+        toast(t('vpn.applied'));
+        await refresh();
+      });
+      return;
+    case 'vpn-delete':
+      await act(el, async function () {
+        if (!confirmBox(t('vpn.deleteConfirm'))) return;
+        await api('/api/vpn/node/delete', { method: 'POST', body: { id: el.dataset.id } });
+        await refresh();
+      });
+      return;
+    case 'vpn-logs':
+      await act(el, async function () {
+        var res = await api('/api/vpn/logs?lines=200');
+        state.cache.vpnLogs = res.logs || '';
+        await refresh();
+      });
+      return;
+    case 'vpn-geo-sync':
+      await act(el, async function () {
+        await api('/api/vpn/geo/sync', { method: 'POST', body: {} });
+        toast(t('vpn.geoSyncing'));
+        pollVPNGeo();
+      });
+      return;
+    case 'vpn-add':
+      vpnNodeModal(null);
+      return;
+    case 'vpn-tab': {
+      var tab = el.dataset.tab || 'link';
+      var bodies = document.querySelectorAll('[data-tab-body]');
+      for (var i = 0; i < bodies.length; i++) {
+        bodies[i].style.display = bodies[i].getAttribute('data-tab-body') === tab ? '' : 'none';
+      }
+      return;
+    }
+    case 'vpn-raw-open':
+      await act(el, async function () {
+        var res = await api('/api/vpn/raw');
+        openModal(t('vpn.rawConfig'),
+          '<div class="btn-row top">' +
+          '<button class="primary" type="button" data-action="vpn-raw-save">' + esc(t('vpn.rawSave')) + '</button>' +
+          '<button class="ghost" type="button" data-action="vpn-raw-load">' + esc(t('vpn.rawLoad')) + '</button>' +
+          '<button class="ghost" type="button" data-action="modal-close">' + esc(t('common.cancel')) + '</button>' +
+          '</div>' +
+          '<textarea name="vpn_raw" rows="22" class="mono" spellcheck="false">' + esc(res.config || '') + '</textarea>' +
+          '<p class="muted small">' + esc(t('vpn.rawHint')) + '</p>');
+        var box = document.querySelector('#modal .modal');
+        if (box) box.classList.add('modal-wide');
+        initVPNRawEditor();
+      });
+      return;
+    case 'vpn-edit':
+      await act(el, async function () {
+        var node = await api('/api/vpn/node/get?id=' + encodeURIComponent(el.dataset.id));
+        vpnNodeModal(node);
+      });
+      return;
+    case 'vpn-node-edit-cancel':
+      await act(el, async function () {
+        state.cache.vpnEditing = '';
+        state.cache.vpnEditingName = '';
+        var form = document.querySelector('form[data-form="vpn-node-manual"]');
+        if (form) form.reset();
+        await refresh();
+      });
+      return;
+    case 'vpn-adopt':
+      await act(el, async function () {
+        var node = await api('/api/vpn/node/adopt', { method: 'POST', body: {} });
+        toast(t('vpn.adopted') + (node && node.address ? '：' + node.address + ':' + node.port : ''));
+        await refresh();
+      });
+      return;
+    case 'vpn-node-fill':
+      await act(el, async function () {
+        var res = await api('/api/vpn/raw');
+        // No refresh here: it would re-render the page and wipe the filled form.
+        if (vpnFillForm(res.config || '')) toast(t('vpn.filled'));
+        else toast(t('vpn.fillFailed'), 'bad');
+      });
+      return;
+    case 'vpn-raw-load':
+      await act(el, async function () {
+        var res = await api('/api/vpn/raw');
+        state.cache.vpnRaw = res.config || '';
+        if (state.cache.vpnRawEditor) {
+          state.cache.vpnRawEditor.setValue(res.config || '');
+        } else {
+          var ta = document.querySelector('textarea[name="vpn_raw"]');
+          if (ta) ta.value = res.config || '';
+        }
+        toast(t('vpn.rawLoaded'));
+      });
+      return;
+    case 'vpn-raw-save':
+      await act(el, async function () {
+        var text = vpnRawValue().trim();
+        if (!text) { toast(t('vpn.rawEmpty'), 'bad'); return; }
+        if (!confirmBox(t('vpn.rawConfirm'))) return;
+        toast(t('common.working'));
+        await api('/api/vpn/raw', { method: 'POST', body: { config: text } });
+        state.cache.vpnRaw = text;
+        toast(t('vpn.rawSaved'));
+        closeModal();
         await refresh();
       });
       return;
@@ -1071,6 +1320,80 @@ async function handleSubmit(ev) {
         state.cache.system.frpc_log_path = d.frpc_log_path || '';
         state.cache.frpcLogLines = parseInt(d.frpc_log_lines, 10) || 200;
         await readFrpcLog(d.frpc_log_lines);
+        toast(t('common.saved'));
+        await refresh();
+      });
+      return;
+    }
+    if (kind === 'vpn-node') {
+      await act(btn, async function () {
+        var link = (d.link || '').trim();
+        if (!link) { toast(t('vpn.importHint')); return; }
+        toast(t('common.working'));
+        await api('/api/vpn/node', { method: 'POST', body: { link: link } });
+        closeModal();
+        toast(t('vpn.imported'));
+        await refresh();
+      });
+      return;
+    }
+    if (kind === 'vpn-node-manual') {
+      await act(btn, async function () {
+        var proto = d.protocol || 'vmess';
+        var node = {
+          protocol: proto,
+          address: (d.address || '').trim(),
+          port: parseInt(d.port, 10) || 0,
+          uuid: (d.uuid || '').trim(),
+          network: d.network || 'tcp',
+          tls: !!d.tls,
+          sni: (d.sni || '').trim(),
+          alter_id: parseInt(d.alter_id, 10) || 0,
+          flow: (d.flow || '').trim(),
+          reality_pbk: (d.reality_pbk || '').trim(),
+          reality_sid: (d.reality_sid || '').trim()
+        };
+        if (proto === 'ss') {
+          node.security = d.method || 'aes-256-gcm';
+        } else if (proto === 'vmess') {
+          node.security = d.security || 'auto';
+        }
+        if (node.network === 'ws') {
+          node.path = (d.path || '').trim();
+          node.host = (d.host || '').trim();
+        } else if (node.network === 'grpc') {
+          node.path = (d.service_name || '').trim();
+        }
+        toast(t('common.working'));
+        if (state.cache.vpnEditing) {
+          await api('/api/vpn/node/update', { method: 'POST', body: { id: state.cache.vpnEditing, node: node } });
+          state.cache.vpnEditing = '';
+          state.cache.vpnEditingName = '';
+          toast(t('vpn.savedEdit'));
+        } else {
+          await api('/api/vpn/node', { method: 'POST', body: { node: node } });
+          toast(t('vpn.imported'));
+        }
+        closeModal();
+        await refresh();
+      });
+      return;
+    }
+    if (kind === 'vpn') {
+      await act(btn, async function () {
+        toast(t('common.working'));
+        await api('/api/vpn/config', { method: 'POST', body: {
+          binary: d.binary || '',
+          config_path: d.config_path || '',
+          log_path: d.log_path || '',
+          socks_port: parseInt(d.socks_port, 10) || 0,
+          http_port: parseInt(d.http_port, 10) || 0,
+          routing_mode: d.routing_mode || '',
+          allow_lan: !!d.allow_lan,
+          transparent: !!d.transparent,
+          transparent_port: parseInt(d.transparent_port, 10) || 0,
+          routing_mode: d.routing_mode || ''
+        } });
         toast(t('common.saved'));
         await refresh();
       });

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -32,6 +33,8 @@ func main() {
 		resetPass  = flag.Bool("reset-password", false, "生成新的随机管理密码并退出")
 		showVer    = flag.Bool("version", false, "显示版本信息")
 		debug      = flag.Bool("debug", false, "输出调试日志")
+		certFix    = flag.Bool("certfix", false, "检测并自动补全当前 VPN 节点的中间证书后退出")
+		vpnTest    = flag.Bool("vpntest", false, "通过本地代理做一次连通性测试并打印结果")
 	)
 	flag.Parse()
 
@@ -131,6 +134,33 @@ func main() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	if *certFix {
+		res, err := m.VPNCertFix(ctx)
+		if res != nil {
+			fmt.Printf("目标: %s\n", res.Host)
+			for _, name := range res.Installed {
+				fmt.Printf("已安装: %s\n", name)
+			}
+			fmt.Printf("结果: %s\n", res.Message)
+		}
+		if err != nil {
+			logger.Fatalf("证书修复失败: %v", err)
+		}
+		return
+	}
+
+	if *vpnTest {
+		res := m.VPNTest(ctx)
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(res)
+		if !res.OK {
+			os.Exit(1)
+		}
+		return
+	}
+
 	m.Start(ctx)
 	if len(cfg.LEDs) > 0 {
 		go m.ApplyLEDs()

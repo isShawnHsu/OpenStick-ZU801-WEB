@@ -26,7 +26,7 @@ func TestParseModemPIN2IsNotBlocking(t *testing.T) {
 	      "unlock-required": "sim-pin2",
 	      "unlock-retries": ["sim-pin (3)", "sim-puk (10)", "sim-pin2 (3)", "sim-puk2 (10)"]
 	    },
-	    "3gpp": {"imei": "861716062150114"}
+	    "3gpp": {"imei": "861234567890123"}
 	  }
 	}`)
 	info, err := ParseModem(data)

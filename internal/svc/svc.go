@@ -61,6 +61,14 @@ type Manager struct {
 	trafficMu sync.Mutex
 	traffic   trafficRuntime
 
+	// geoMu guards the background geo file sync progress.
+	geoMu  sync.Mutex
+	geoVPN VPNGeoState
+
+	// tproxyMu guards whether the transparent proxy rules are installed.
+	tproxyMu sync.Mutex
+	tproxyOn bool
+
 	// autoMu serialises the cellular-data/bridge automatic state machine.
 	autoMu sync.Mutex
 	// bridgeRetryAfter blocks automatic bridge retries until the given time
@@ -274,6 +282,7 @@ func (m *Manager) Start(ctx context.Context) {
 	go m.watchdogLoop(ctx)
 	go m.smsForwardLoop(ctx)
 	go m.resumeBridge(ctx)
+	go m.resumeTransparent(ctx)
 	go m.applyFlightModeOnStart(ctx)
 	go m.ledLoop(ctx)
 }
@@ -307,6 +316,12 @@ func (m *Manager) trafficLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := m.SampleTraffic(ctx); err != nil {
 				m.log.Printf("流量统计失败: %v", err)
+			}
+			// A dead tunnel with redirects still in place means no internet at
+			// all for every client; drop the rules so the link keeps working.
+			if m.TransparentActive() && !m.unitActive(ctx, m.Config().VPN.ServiceName) {
+				m.removeTransparentProxy(ctx)
+				m.log.Printf("VPN 已不在运行，已移除透明代理重定向")
 			}
 			if time.Since(m.traffic.lastSave) >= 60*time.Second {
 				if err := m.store.Save(); err != nil {

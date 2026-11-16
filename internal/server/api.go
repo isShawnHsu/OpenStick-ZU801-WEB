@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"msm8916d/internal/config"
+	"msm8916d/internal/state"
 	"msm8916d/internal/svc"
 )
 
@@ -719,6 +720,279 @@ func (s *Server) apiTrafficUnblock(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiTrafficLifetime(w http.ResponseWriter, r *http.Request) {
 	s.m.ResetLifetime()
 	ok(w, s.m.TrafficStats(r.Context()))
+}
+
+// apiFrpc returns the frpc service state and its TOML config.
+func (s *Server) apiFrpc(w http.ResponseWriter, r *http.Request) {
+	text, err := s.m.FrpcRawConfig()
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, map[string]any{"status": s.m.FrpcStatus(r.Context()), "config": text})
+}
+
+// apiFrpcConfigSave validates and installs a hand-edited frpc.toml.
+func (s *Server) apiFrpcConfigSave(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Config string `json:"config"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.m.SaveFrpcRawConfig(r.Context(), body.Config); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, s.m.FrpcStatus(r.Context()))
+}
+
+// ---------------------------------------------------------------- vpn
+
+func (s *Server) apiVPN(w http.ResponseWriter, r *http.Request) {
+	ok(w, s.m.VPNStatus(r.Context()))
+}
+
+func (s *Server) apiVPNAddNode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Link string       `json:"link"`
+		Node *vpnNodeBody `json:"node"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.Node != nil {
+		node, err := s.m.AddVPNNodeManual(r.Context(), body.Node.toNode())
+		if err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		ok(w, node)
+		return
+	}
+	node, err := s.m.AddVPNNode(r.Context(), body.Link)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, node)
+}
+
+func (s *Server) apiVPNAdoptNode(w http.ResponseWriter, r *http.Request) {
+	node, err := s.m.AdoptVPNNode(r.Context())
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, node)
+}
+
+// apiVPNNodeGet returns one node with its credential so the form can edit it.
+func (s *Server) apiVPNNodeGet(w http.ResponseWriter, r *http.Request) {
+	node, err := s.m.VPNNodeByID(r.URL.Query().Get("id"))
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, node)
+}
+
+type vpnNodeBody struct {
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	UUID     string `json:"uuid"`
+	AlterID  int    `json:"alter_id"`
+	Security string `json:"security"`
+	Network  string `json:"network"`
+	Path     string `json:"path"`
+	Host     string `json:"host"`
+	TLS      bool   `json:"tls"`
+	SNI      string `json:"sni"`
+	Flow     string `json:"flow"`
+	PBK      string `json:"reality_pbk"`
+	SID      string `json:"reality_sid"`
+	SPX      string `json:"reality_spider_x"`
+}
+
+func (b vpnNodeBody) toNode() state.VPNNode {
+	return state.VPNNode{
+		Name:             b.Name,
+		Protocol:         b.Protocol,
+		Address:          b.Address,
+		Port:             b.Port,
+		UUID:             b.UUID,
+		AlterID:          b.AlterID,
+		Security:         b.Security,
+		Network:          b.Network,
+		Path:             b.Path,
+		Host:             b.Host,
+		TLS:              b.TLS,
+		SNI:              b.SNI,
+		Flow:             b.Flow,
+		RealityPublicKey: b.PBK,
+		RealityShortID:   b.SID,
+		RealitySpiderX:   b.SPX,
+	}
+}
+
+func (s *Server) apiVPNUpdateNode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID   string      `json:"id"`
+		Node vpnNodeBody `json:"node"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.m.UpdateVPNNode(r.Context(), body.ID, body.Node.toNode()); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, s.m.VPNStatus(r.Context()))
+}
+
+func (s *Server) apiVPNDeleteNode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.m.DeleteVPNNode(body.ID); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, s.m.VPNStatus(r.Context()))
+}
+
+func (s *Server) apiVPNSelectNode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.m.SelectVPNNode(r.Context(), body.ID); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, s.m.VPNStatus(r.Context()))
+}
+
+func (s *Server) apiVPNControl(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Action string `json:"action"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.m.ControlVPN(r.Context(), body.Action); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, s.m.VPNStatus(r.Context()))
+}
+
+func (s *Server) apiVPNConfig(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Binary     string `json:"binary"`
+		ConfigPath string `json:"config_path"`
+		LogPath    string `json:"log_path"`
+		SocksPort  int    `json:"socks_port"`
+		HTTPPort   int    `json:"http_port"`
+		AllowLAN   bool   `json:"allow_lan"`
+		RoutingMode string `json:"routing_mode"`
+		Transparent bool   `json:"transparent"`
+		TransparentPort int `json:"transparent_port"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.m.SetVPNConfig(r.Context(), body.Binary, body.ConfigPath, body.LogPath, body.SocksPort, body.HTTPPort, body.AllowLAN, body.RoutingMode, body.Transparent, body.TransparentPort); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, s.m.VPNStatus(r.Context()))
+}
+
+// apiVPNGeoSync starts a background geo download; the page polls the status.
+func (s *Server) apiVPNGeoSync(w http.ResponseWriter, r *http.Request) {
+	if err := s.m.StartVPNGeoSync(); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, s.m.VPNGeoState())
+}
+
+// apiVPNGeoStatus reports geo sync progress and its step-by-step log.
+func (s *Server) apiVPNGeoStatus(w http.ResponseWriter, r *http.Request) {
+	ok(w, s.m.VPNGeoState())
+}
+
+// apiVPNCertFix 自动补齐当前节点的中间证书。
+func (s *Server) apiVPNCertFix(w http.ResponseWriter, r *http.Request) {
+	res, err := s.m.VPNCertFix(r.Context())
+	if err != nil {
+		if res != nil {
+			ok(w, map[string]any{"result": res, "error": err.Error()})
+			return
+		}
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, map[string]any{
+		"result": res,
+		"status": s.m.VPNStatus(r.Context()),
+	})
+}
+
+// apiVPNTest checks the tunnel end to end and reports the exit IP.
+func (s *Server) apiVPNTest(w http.ResponseWriter, r *http.Request) {
+	ok(w, s.m.VPNTest(r.Context()))
+}
+
+// apiVPNRaw returns or replaces the full v2ray config file, so a config copied
+// from v2rayN (routing rules, DNS, multiple outbounds) can be managed here.
+func (s *Server) apiVPNRaw(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		text, err := s.m.VPNRawConfig()
+		if err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		ok(w, map[string]string{"config": text})
+		return
+	}
+	var body struct {
+		Config string `json:"config"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.m.SaveVPNRawConfig(r.Context(), body.Config); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, s.m.VPNStatus(r.Context()))
+}
+
+func (s *Server) apiVPNLogs(w http.ResponseWriter, r *http.Request) {
+	lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+	text, err := s.m.VPNLogs(lines)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, map[string]string{"logs": text})
 }
 
 // ---------------------------------------------------------------- system
