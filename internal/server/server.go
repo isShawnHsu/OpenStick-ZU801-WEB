@@ -167,7 +167,14 @@ func (s *Server) routes() http.Handler {
 
 	mux.Handle("GET /api/config", s.protect(s.apiConfigExport))
 
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(web.Static()))))
+	// The asset files live in the binary, so their mtime never changes. Without
+	// a cache directive the browser keeps the old CSS/JS after an upgrade and
+	// the page silently runs a mix of versions; no-cache forces revalidation.
+	staticHandler := http.StripPrefix("/static/", http.FileServer(http.FS(web.Static())))
+	mux.Handle("GET /static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		staticHandler.ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("/", s.serveSPA)
 
 	return s.security(s.accessLog(mux))

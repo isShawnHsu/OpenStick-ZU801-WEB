@@ -48,6 +48,8 @@ html, body {
 }
 
 body { overflow-wrap: break-word; }
+/* 内容高度频繁变化（编辑器虚拟滚动）时，别让浏览器做滚动锚定 */
+#main, .modal { overflow-anchor: none; }
 body.modal-open { overflow: hidden; }
 
 h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: .1px; }
@@ -586,17 +588,33 @@ td.row-actions button { margin-left: 4px; }
 }
 
 /* frpc TOML editor (CodeMirror) */
+/* 单一滚动容器：外层固定高度、内部滚动。
+   以前外层写 height: 74vh 又写 min-height: 560px，还给内部 scroller 加 min-height: 74vh，
+   三层高度互相打架，滚轮在编辑器和页面之间来回抢，表现为"回弹"。 */
 .CodeMirror {
-  height: 74vh;
-  min-height: 560px;
+  height: clamp(340px, 62vh, 720px);
+  min-height: 0;
   border-radius: 10px;
   font-size: 13px;
   border: 1px solid var(--line, #26324a);
+  overflow: hidden;
+  /* 滚到边界时不要把滚轮继续传给页面 */
+  overscroll-behavior: contain;
+  /* CodeMirror 虚拟滚动会不断改行高，scroll anchoring 会把页面拽回去 */
+  overflow-anchor: none;
 }
-.CodeMirror-scroll { min-height: 74vh; }
+.CodeMirror-scroll {
+  min-height: 0;
+  overscroll-behavior: contain;
+  /* 真正的滚动容器是它：CodeMirror 虚拟滚动会不断增删行节点，
+     Edge/Chrome 的滚动锚定会为了“稳定视口”把 scrollTop 往回拉，
+     表现就是滚下去又弹回来。这一行是治本的关键。 */
+  overflow-anchor: none;
+}
 textarea[name="frpc_raw"] {
-  height: 74vh;
-  min-height: 560px;
+  height: clamp(340px, 62vh, 720px);
+  min-height: 0;
+  overscroll-behavior: contain;
   font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
@@ -606,8 +624,8 @@ textarea[name="frpc_raw"] {
 .modal-wide .CodeMirror + p,
 .modal-wide textarea + p { margin-top: 12px; }
 .modal-wide .CodeMirror {
-  height: 62vh;
-  min-height: 380px;
+  height: clamp(320px, 62vh, 760px);
+  min-height: 0;
   border-radius: 10px;
   font-size: 13px;
   border: 1px solid var(--line, #26324a);
