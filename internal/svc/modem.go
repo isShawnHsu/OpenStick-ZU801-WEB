@@ -349,6 +349,9 @@ func (m *Manager) noRadioTool() bool {
 func (m *Manager) cellularRadioOff(ctx context.Context) error {
 	attempted, succeeded := 0, 0
 	var lastErr error
+	// The tools are redundant: rfkill usually succeeds even when mmcli reports
+	// "modem in failed state" (no SIM). Only a total failure is worth logging,
+	// and the caller already does that with the returned error.
 	record := func(err error, label string) {
 		attempted++
 		if err == nil {
@@ -356,7 +359,6 @@ func (m *Manager) cellularRadioOff(ctx context.Context) error {
 			return
 		}
 		lastErr = err
-		m.log.Printf("%s 关闭蜂窝射频失败: %v", label, err)
 	}
 	if m.Available("nmcli") {
 		_, err := m.Run(ctx, 15*time.Second, "nmcli", "radio", "wwan", "off")
@@ -397,7 +399,6 @@ func (m *Manager) cellularRadioOn(ctx context.Context, waitReady bool) error {
 			return
 		}
 		lastErr = err
-		m.log.Printf("%s 恢复蜂窝射频失败: %v", label, err)
 	}
 	if m.Available("rfkill") {
 		_, err := m.Run(ctx, 10*time.Second, "rfkill", "unblock", "wwan")

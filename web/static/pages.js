@@ -511,7 +511,7 @@ function wifiView(r) {
       '<div class="form-grid">' +
       field(t('wifi.ssid'), txt('ssid', c.ssid || '')) +
       field(t('wifi.password'), '<input type="text" name="password" value="' + attr(c.password || '') + '" autocomplete="new-password">') +
-      field(t('wifi.security'), sel('security', c.security || 'wpa2', [['wpa2', t('wifi.wpa2')], ['wpa3', t('wifi.wpa3')], ['open', t('wifi.open')]])) +
+      field(t('wifi.security'), sel('security', c.security || 'wpa2', [['wpa2', t('wifi.wpa2')], ['open', t('wifi.open')]])) +
       field(t('wifi.band'), '<input type="text" name="band" value="2.4 GHz" disabled>') +
       field(t('wifi.channel'), sel('channel', c.channel || 0, channelOptions)) +
       field(t('wifi.maxClients'), '<input type="number" name="max_clients" min="1" max="64" value="' + attr(c.max_clients || 10) + '">') +
@@ -520,6 +520,7 @@ function wifiView(r) {
       '</div>' +
       check('hidden', c.hidden, t('wifi.hidden')) +
       check('apply_on_start', c.apply_on_start, t('wifi.applyOnStart')) +
+      '<p class="muted small">' + esc(t('wifi.wpa3Hint')) + '</p>' +
       '<p class="muted small">' + esc(t('wifi.note')) + '</p>' +
       '<div class="btn-row"><button class="primary" type="submit">' + esc(t('wifi.apply')) + '</button>' +
       '<button class="ghost" type="button" data-action="wifi-scan">' + esc(t('wifi.scan')) + '</button></div></form>') +
@@ -591,7 +592,7 @@ function bridgeView(r) {
       '<div class="form-grid">' +
       field(t('bridge.upstreamSsid'), txt('upstream_ssid', c.upstream_ssid || '', 'Upstream WiFi')) +
       field(t('bridge.upstreamPassword'), '<input type="text" name="upstream_password" value="' + attr(c.upstream_password || '') + '">') +
-      field(t('bridge.upstreamSecurity'), sel('upstream_security', c.upstream_security || 'wpa2', [['wpa2', t('wifi.wpa2')], ['wpa3', t('wifi.wpa3')], ['open', t('wifi.open')], ['auto', 'Auto']])) +
+      field(t('bridge.upstreamSecurity'), sel('upstream_security', c.upstream_security || 'wpa2', [['wpa2', t('wifi.wpa2')], ['open', t('wifi.open')], ['auto', 'Auto']])) +
       field(t('bridge.downstream'), '<input type="text" name="downstream_interface" value="' + attr(c.downstream_interface || 'usb0') + '" placeholder="usb0">') +
       field(t('bridge.routeMetric'), '<input type="number" name="route_metric" min="0" max="99999" value="' + attr(c.route_metric || 50) + '">') +
       '</div>' +

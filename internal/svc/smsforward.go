@@ -26,9 +26,10 @@ const (
 	smsForwardMaxAge      = 30 * 24 * time.Hour
 	smsForwardLogInterval = 5 * time.Minute
 	// smsForwardQuietInterval is used for failures that are expected while the
-	// SIM is locked or the modem is off. The poller retries every minute, so a
-	// five minute log line would fill the journal with the same message.
-	smsForwardQuietInterval = 30 * time.Minute
+	// SIM is missing or the modem is off. The poller retries every minute, so a
+	// five minute log line would fill the journal with the same message; four
+	// hours is enough to still see it after a long offline period.
+	smsForwardQuietInterval = 4 * time.Hour
 )
 
 // smsForwardExpectedFailure reports whether an error is the normal "modem/SIM

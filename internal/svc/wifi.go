@@ -250,6 +250,17 @@ func (m *Manager) ApplyWifi(ctx context.Context) error {
 			backend = "hostapd"
 		}
 	}
+	// The wcn36xx driver cannot install the management-frame keys (IGTK) that
+	// PMF needs: hostapd fails with "set_key ... err=-22 Invalid argument" and
+	// "Interface initialization failed" for ieee80211w=1 and 2 alike. SAE
+	// requires PMF, so WPA3 cannot work as an AP here; fall back to WPA2
+	// instead of leaving the user with a hotspot that never comes up.
+	eff := *cfg
+	if eff.Wifi.Security == "wpa3" || eff.Wifi.Security == "wpa2wpa3" {
+		m.log.Printf("无线驱动不支持 PMF，WPA3 无法启用，已按 WPA2 启动热点")
+		eff.Wifi.Security = "wpa2"
+	}
+	cfg = &eff
 	if backend == "nmcli" {
 		return m.applyWifiNM(ctx, cfg)
 	}
@@ -316,6 +327,12 @@ func (m *Manager) applyWifiNM(ctx context.Context, cfg *config.Config) error {
 			"802-11-wireless-security.proto", "rsn",
 			"802-11-wireless-security.pairwise", "ccmp",
 			"802-11-wireless-security.group", "ccmp")
+	} else if cfg.Wifi.Security == "wpa2wpa3" {
+		// NetworkManager 1.30 has no transition mode; fall back to WPA2 so the
+		// hotspot still starts when someone forces backend=nmcli.
+		m.log.Printf("NetworkManager 无法表达 WPA2/WPA3 混合模式，已按 WPA2 启动热点")
+		args = append(args, "802-11-wireless-security.key-mgmt", "wpa-psk",
+			"802-11-wireless-security.psk", cfg.Wifi.Password)
 	} else {
 		args = append(args, "802-11-wireless-security.key-mgmt", "wpa-psk",
 			"802-11-wireless-security.psk", cfg.Wifi.Password)
@@ -578,13 +595,40 @@ func buildHostapdConfig(cfg *config.Config, iface, ssid, password, security, ban
 	case "open":
 		fmt.Fprintf(&b, "wpa=0\n")
 	case "wpa3":
-		fmt.Fprintf(&b, "wpa=2\nwpa_key_mgmt=SAE\nwpa_pairwise=CCMP\nrsn_pairwise=CCMP\nieee80211w=2\nsae_require_mfp=1\n")
-		fmt.Fprintf(&b, "wpa_passphrase=%s\n", password)
+		// SAE only. sae_password is what hostapd uses for WPA3; wpa_passphrase
+		// stays as the fallback some clients still expect.
+		fmt.Fprintf(&b, "wpa=2\nwpa_key_mgmt=SAE\nrsn_pairwise=CCMP\nieee80211w=2\nsae_require_mfp=1\n")
+		fmt.Fprintf(&b, "wpa_passphrase=%s\n", hostapdValue(password))
+		fmt.Fprintf(&b, "sae_password=%s\n", hostapdValue(password))
+	case "wpa2wpa3":
+		// Transition mode: WPA2-PSK and WPA3-SAE at the same time. This is the
+		// most compatible setting; older phones use PSK, iPhones use SAE, and
+		// PMF is optional (ieee80211w=1).
+		fmt.Fprintf(&b, "wpa=2\nwpa_key_mgmt=WPA-PSK SAE\nrsn_pairwise=CCMP\nieee80211w=1\n")
+		fmt.Fprintf(&b, "wpa_passphrase=%s\n", hostapdValue(password))
+		fmt.Fprintf(&b, "sae_password=%s\n", hostapdValue(password))
 	default:
 		fmt.Fprintf(&b, "wpa=2\nwpa_key_mgmt=WPA-PSK\nwpa_pairwise=CCMP\nrsn_pairwise=CCMP\n")
-		fmt.Fprintf(&b, "wpa_passphrase=%s\n", password)
+		fmt.Fprintf(&b, "wpa_passphrase=%s\n", hostapdValue(password))
 	}
 	return b.String()
+}
+
+// hostapdValue quotes a value when it contains characters that hostapd's
+// configuration parser would otherwise treat specially.
+func hostapdValue(s string) string {
+	safe := true
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '.' || r == '_' || r == '-' || r == '@' || r == '+' || r == '=') {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
 
 func boolInt(v bool) int {

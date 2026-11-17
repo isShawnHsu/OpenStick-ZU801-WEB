@@ -478,32 +478,66 @@ func (m *Manager) connectUpstream(ctx context.Context, cfg *config.Config, upstr
 	}
 	sec := cfg.Wifi.Bridge.UpstreamSecurity
 	pass := cfg.Wifi.Bridge.UpstreamPassword
-	switch {
-	case sec == "open" || pass == "":
-		args = append(args, "802-11-wireless-security.key-mgmt", "none")
-	case sec == "wpa3":
-		args = append(args, "802-11-wireless-security.key-mgmt", "sae",
-			"802-11-wireless-security.psk", pass)
-	default:
-		args = append(args, "802-11-wireless-security.key-mgmt", "wpa-psk",
-			"802-11-wireless-security.psk", pass)
+	// "auto" cannot be expressed in one NetworkManager profile, so the profile
+	// is written for WPA2 first and rewritten as WPA3 when that fails. Station
+	// mode does SAE in wpa_supplicant (the driver supports the AUTHENTICATE
+	// command), so WPA3 as a client is a different path from the hotspot.
+	modes := []string{sec}
+	if sec == "" || sec == "auto" {
+		modes = []string{"wpa2", "wpa3"}
 	}
-	if _, err := m.Run(ctx, 20*time.Second, "nmcli", args...); err != nil {
-		return fmt.Errorf("配置上游 WiFi 失败: %w", err)
-	}
-	if _, err := m.Run(ctx, 75*time.Second, "nmcli", "connection", "up", name); err != nil {
-		return fmt.Errorf("连接上游 WiFi 失败: %w", err)
-	}
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		if m.ifaceIPv4(ctx, upstream) != "" {
+	var lastErr error
+	for i, mode := range modes {
+		if i > 0 {
+			m.log.Printf("上游 %s 用 %s 连不上，改用 %s 重试", cfg.Wifi.Bridge.UpstreamSSID, modes[i-1], mode)
+			_, _ = m.Run(ctx, 10*time.Second, "nmcli", "connection", "modify", name,
+				"802-11-wireless-security.key-mgmt", "sae",
+				"802-11-wireless-security.psk", pass,
+				"802-11-wireless-security.pmf", "2")
+		} else {
+			modArgs := append([]string{}, args...)
+			switch {
+			case mode == "open" || pass == "":
+				modArgs = append(modArgs, "802-11-wireless-security.key-mgmt", "none")
+			case mode == "wpa3":
+				modArgs = append(modArgs, "802-11-wireless-security.key-mgmt", "sae",
+					"802-11-wireless-security.psk", pass,
+					"802-11-wireless-security.pmf", "2")
+			default:
+				modArgs = append(modArgs, "802-11-wireless-security.key-mgmt", "wpa-psk",
+					"802-11-wireless-security.psk", pass)
+			}
+			if _, err := m.Run(ctx, 20*time.Second, "nmcli", modArgs...); err != nil {
+				return fmt.Errorf("配置上游 WiFi 失败: %w", err)
+			}
+		}
+		if _, err := m.Run(ctx, 75*time.Second, "nmcli", "connection", "up", name); err != nil {
+			lastErr = err
+			continue
+		}
+		deadline := time.Now().Add(20 * time.Second)
+		got := false
+		for time.Now().Before(deadline) {
+			if m.ifaceIPv4(ctx, upstream) != "" {
+				got = true
+				break
+			}
+			if !sleepCtx(ctx, 1*time.Second) {
+				return ctx.Err()
+			}
+		}
+		if got {
+			if mode == "wpa3" && (sec == "" || sec == "auto") {
+				m.log.Printf("上游 %s 实际使用 WPA3 连接", cfg.Wifi.Bridge.UpstreamSSID)
+			}
 			return nil
 		}
-		if !sleepCtx(ctx, 1*time.Second) {
-			return ctx.Err()
-		}
+		lastErr = fmt.Errorf("连接后 20 秒内没有拿到 IPv4 地址")
 	}
-	return nil
+	if lastErr != nil {
+		return fmt.Errorf("连接上游 WiFi 失败: %w", lastErr)
+	}
+	return fmt.Errorf("连接上游 WiFi 失败")
 }
 
 func (m *Manager) ifaceIPv4(ctx context.Context, iface string) string {

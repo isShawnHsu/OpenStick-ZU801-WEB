@@ -104,7 +104,7 @@ type WifiConfig struct {
 	Connection        string       `json:"connection"` // optional NM connection name/UUID
 	SSID              string       `json:"ssid"`
 	Password          string       `json:"password"`
-	Security          string       `json:"security"` // wpa2 | wpa3 | open
+	Security          string       `json:"security"` // wpa2 | wpa2wpa3 | wpa3 | open
 	Band              string       `json:"band"`     // bg (MSM8916 仅支持 2.4 GHz)
 	Channel           int          `json:"channel"`  // 0 = auto
 	Hidden            bool         `json:"hidden"`
@@ -270,15 +270,15 @@ func Default() *Config {
 			LEDOnTime:         "07:00",
 		},
 		VPN: VPNConfig{
-			Binary:      "/usr/local/bin/v2ray",
-			ConfigPath:  "/etc/v2ray/config.json",
-			ServiceName: "v2ray",
-			SocksPort:   1080,
-			HTTPPort:    1081,
-			AllowLAN:    true,
-			RoutingMode: "smart",
-			GeoPath:     "/usr/lib/v2ray",
-			LogPath:     "/var/log/v2ray/error.log",
+			Binary:          "/usr/local/bin/v2ray",
+			ConfigPath:      "/etc/v2ray/config.json",
+			ServiceName:     "v2ray",
+			SocksPort:       1080,
+			HTTPPort:        1081,
+			AllowLAN:        true,
+			RoutingMode:     "smart",
+			GeoPath:         "/usr/lib/v2ray",
+			LogPath:         "/var/log/v2ray/error.log",
 			TransparentPort: 12345,
 		},
 		LEDs: map[string]LEDSetting{},
@@ -612,7 +612,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("WiFi 名称不能包含控制字符")
 	}
 	switch c.Wifi.Security {
-	case "wpa2", "wpa3":
+	case "wpa2", "wpa3", "wpa2wpa3":
 		if l := len([]byte(c.Wifi.Password)); l < 8 || l > 63 {
 			return fmt.Errorf("WiFi 密码长度必须为 8-63 个字符")
 		}
