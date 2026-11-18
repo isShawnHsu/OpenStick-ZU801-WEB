@@ -362,6 +362,7 @@ async function loadPage(page, silent) {
     if (main) {
       main.innerHTML = html;
       if (page === 'sms') initSmsForwardForms(main);
+      if (page === 'bridge') initBridgeForm(main);
       if (page === 'vpn') initVPNForms(main);
       if (page === 'frpc') initFrpcEditor(main); else disposeFrpcEditor();
     }
@@ -1073,7 +1074,7 @@ async function saveBridgeForm() {
   var d = formObject(form);
   var c = state.cache.bridgeConfig || {};
   var payload = {
-    mode: 'usb',
+    mode: d.mode || 'usb',
     downstream_interface: d.downstream_interface || 'usb0',
     upstream_ssid: d.upstream_ssid,
     upstream_password: d.upstream_password,
@@ -1086,10 +1087,12 @@ async function saveBridgeForm() {
     route_metric: parseInt(d.route_metric, 10) || 50,
     'auto': !!d.auto,
     force: !!c.force,
-    enabled: !!c.enabled
+    enabled: !!c.enabled,
+    usb_connection: c.usb_connection || 'USB'
   };
-  await api('/api/bridge', { method: 'POST', body: payload });
+  var res = await api('/api/bridge', { method: 'POST', body: payload });
   state.cache.bridgeConfig = payload;
+  return res;
 }
 
 async function readFrpcLog(lines) {
@@ -1280,8 +1283,11 @@ async function handleSubmit(ev) {
     }
     if (kind === 'bridge') {
       await act(btn, async function () {
-        await saveBridgeForm();
-        toast(t('common.saved'));
+        var res = await saveBridgeForm();
+        var data = (res && res.data) || {};
+        if (data.applied) toast(t('bridge.savedApplied'));
+        else if (data.apply_error) toast(t('bridge.savedApplyFailed') + '：' + data.apply_error, 'bad');
+        else toast(t('bridge.savedNeedEnable'));
         await refresh();
       });
       return;

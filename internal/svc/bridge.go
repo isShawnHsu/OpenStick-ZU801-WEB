@@ -42,6 +42,50 @@ type BridgeStatus struct {
 	UpstreamIP          string           `json:"upstream_ip"`
 }
 
+// RestartBridge tears the running bridge down and brings it back with the
+// current configuration, so a saved change takes effect without a reboot.
+// When the new configuration fails, the previously working mode is restored so
+// a bad save cannot leave the device without internet.
+func (m *Manager) RestartBridge(ctx context.Context) error {
+	prevMode := ""
+	if m.BridgeActive() {
+		prevMode = m.BridgeSnapshot().Mode
+		if err := m.disableBridge(ctx, false); err != nil {
+			return err
+		}
+	}
+	err := m.EnableBridge(ctx)
+	if err == nil {
+		return nil
+	}
+	// A failed switch to USB→WiFi must bring the hotspot back, otherwise the
+	// phone has no network to manage the device with. EnableBridge already
+	// restored the normal AP on its error path, so just stop here.
+	if m.Config().Wifi.Bridge.Mode == "usb_ap" && prevMode != "usb_ap" {
+		m.log.Printf("USB 转 WiFi 启用失败，已恢复普通热点方便手机管理")
+		return err
+	}
+	switch prevMode {
+	case "usb":
+		m.log.Printf("新配置生效失败，恢复原来的 WiFi 转 USB 共享")
+		m.bridgeMu.Lock()
+		rerr := m.enableUSBBridgeLocked(ctx)
+		m.bridgeMu.Unlock()
+		if rerr != nil {
+			m.log.Printf("恢复 WiFi 转 USB 共享失败: %v", rerr)
+		}
+	case "usb_ap":
+		m.log.Printf("新配置生效失败，恢复原来的 USB 转 WiFi 共享")
+		m.bridgeMu.Lock()
+		rerr := m.enableUSBUpstreamAPLocked(ctx)
+		m.bridgeMu.Unlock()
+		if rerr != nil {
+			m.log.Printf("恢复 USB 转 WiFi 共享失败: %v", rerr)
+		}
+	}
+	return err
+}
+
 // BridgeSnapshot returns a copy of the relay runtime state.
 func (m *Manager) BridgeSnapshot() bridgeRuntime {
 	m.bridgeMu.Lock()
@@ -80,6 +124,19 @@ func (m *Manager) BridgeStatus(ctx context.Context) *BridgeStatus {
 			st.DownstreamIP = m.ifaceIPv4(ctx, st.DownstreamInterface)
 		}
 	}
+	if cfg.Wifi.Bridge.Mode == "usb_ap" {
+		// USB is the WAN side here, the AP is the downstream.
+		st.APInterface = cfg.Wifi.Interface
+		st.UpstreamIface = cfg.Wifi.Bridge.DownstreamInterface
+		st.UpstreamSSID = "USB 共享"
+		if st.UpstreamIface != "" {
+			st.UpstreamIP = m.ifaceIPv4(ctx, st.UpstreamIface)
+		}
+		if st.APInterface != "" {
+			st.DownstreamInterface = st.APInterface
+			st.DownstreamIP = m.ifaceIPv4(ctx, st.APInterface)
+		}
+	}
 	if st.UpstreamIface != "" {
 		st.UpstreamIP = m.ifaceIPv4(ctx, st.UpstreamIface)
 	}
@@ -98,6 +155,20 @@ func (m *Manager) BridgeCapability(ctx context.Context) BridgeCapability {
 	if cfg.Wifi.Bridge.Mode == "" || cfg.Wifi.Bridge.Mode == "usb" {
 		caps.Supported = true
 		caps.Reason = "USB 共享模式：wlan0 连接上游 WiFi，USB 下游接口给其他设备提供网络"
+		for _, name := range []string{cfg.Wifi.Interface, cfg.Wifi.Bridge.DownstreamInterface} {
+			if name != "" {
+				caps.Interfaces = append(caps.Interfaces, name)
+			}
+		}
+		return caps
+	}
+	if cfg.Wifi.Bridge.Mode == "usb_ap" {
+		caps.Supported = m.Available("hostapd")
+		if caps.Supported {
+			caps.Reason = "USB 上行模式：电脑把网络共享到 USB 口，设备用无线网卡发射热点"
+		} else {
+			caps.Reason = "USB 上行模式需要 hostapd"
+		}
 		for _, name := range []string{cfg.Wifi.Interface, cfg.Wifi.Bridge.DownstreamInterface} {
 			if name != "" {
 				caps.Interfaces = append(caps.Interfaces, name)
@@ -156,9 +227,12 @@ const bridgeAutoRetryDelay = 5 * time.Minute
 func (m *Manager) EnableBridge(ctx context.Context) error {
 	m.bridgeMu.Lock()
 	var err error
-	if mode := m.Config().Wifi.Bridge.Mode; mode == "" || mode == "usb" {
+	switch mode := m.Config().Wifi.Bridge.Mode; mode {
+	case "usb_ap":
+		err = m.enableUSBUpstreamAPLocked(ctx)
+	case "", "usb":
 		err = m.enableUSBBridgeLocked(ctx)
-	} else {
+	default:
 		err = m.enableBridgeLocked(ctx)
 	}
 	cfg := m.Config().Clone()
@@ -271,6 +345,194 @@ func (m *Manager) enableUSBBridgeLocked(ctx context.Context) error {
 	}
 	m.log.Printf("USB 共享已启用: %s -> %s", downstream, upstream)
 	return nil
+}
+
+// enableUSBUpstreamAPLocked does the opposite of USB sharing: the USB port is
+// the WAN side (the PC shares its internet to this device) and wlan0 runs an
+// access point for other devices. No AP+STA concurrency is needed because the
+// upstream is wired.
+func (m *Manager) enableUSBUpstreamAPLocked(ctx context.Context) error {
+	cfg := m.Config()
+	if m.CellularDataActive(ctx) {
+		return fmt.Errorf("蜂窝数据已开启，请先关闭流量再启用 USB 转 WiFi 共享")
+	}
+	if !m.Available("hostapd") {
+		return fmt.Errorf("USB 转 WiFi 共享需要 hostapd")
+	}
+	if !m.Available("nmcli") {
+		return fmt.Errorf("USB 转 WiFi 共享需要 NetworkManager（nmcli）")
+	}
+	usb := strings.TrimSpace(cfg.Wifi.Bridge.DownstreamInterface)
+	if usb == "" {
+		usb = "usb0"
+	}
+	apIface := cfg.Wifi.Interface
+	if apIface == "" {
+		return fmt.Errorf("未配置无线网卡")
+	}
+	if usb == apIface {
+		return fmt.Errorf("USB 接口和无线网卡不能相同")
+	}
+
+	// Remember which profile currently provides the USB LAN so it can be
+	// restored when this mode is turned off.
+	if strings.TrimSpace(cfg.Wifi.Bridge.USBConnection) == "" {
+		prev := m.activeConnectionFor(ctx, usb)
+		if prev == "" {
+			prev = "USB"
+		}
+		_ = m.Update(func(c *config.Config) error {
+			c.Wifi.Bridge.USBConnection = prev
+			return nil
+		})
+		cfg = m.Config()
+	}
+
+	if m.bridge.Active {
+		m.teardownBridgeLocked(ctx, cfg)
+	}
+	m.stopStandaloneAP(ctx)
+	m.stopBridgeServices(ctx)
+
+	m.log.Printf("USB 上行共享: 上游=%s AP=%s", usb, apIface)
+
+	// Turn the USB port into the WAN side with a fixed address: the device is a
+	// NAT client of the PC's ICS, and a deterministic address keeps the web UI
+	// reachable at http://192.168.137.2/ instead of a changing DHCP lease.
+	_, _ = m.Run(ctx, 10*time.Second, "nmcli", "connection", "delete", usbUpstreamProfile)
+	if _, err := m.Run(ctx, 20*time.Second, "nmcli", "connection", "add", "type", "ethernet",
+		"ifname", usb, "con-name", usbUpstreamProfile); err != nil {
+		m.restoreUSBProfile(ctx, cfg)
+		return fmt.Errorf("创建 USB 上行连接失败: %w", err)
+	}
+	if _, err := m.Run(ctx, 15*time.Second, "nmcli", "connection", "modify", usbUpstreamProfile,
+		"connection.autoconnect", "no",
+		"ipv4.method", "manual",
+		"ipv4.addresses", "192.168.137.2/24",
+		"ipv4.gateway", "192.168.137.1",
+		"ipv4.dns", "223.5.5.5,119.29.29.29",
+		"ipv6.method", "ignore"); err != nil {
+		m.restoreUSBProfile(ctx, cfg)
+		return fmt.Errorf("配置 USB 上行连接失败: %w", err)
+	}
+	if _, err := m.Run(ctx, 20*time.Second, "nmcli", "connection", "up", usbUpstreamProfile); err != nil {
+		m.restoreUSBProfile(ctx, cfg)
+		return fmt.Errorf("启用 USB 上行连接失败：请确认电脑上给这块 USB 网卡开了“网络共享”。原始错误: %w", err)
+	}
+	// Prove the PC really NATs: a plain TCP connect through the gateway.
+	if !vpnDialOK(ctx, "223.5.5.5:443", 6*time.Second) {
+		m.restoreUSBProfile(ctx, cfg)
+		return fmt.Errorf("USB 口通了但上不了网：请在 Windows 上给这块 USB 网卡开启“网络共享”（适配器属性 → 共享 → 允许其他网络用户…），再试一次。已恢复原来的网络")
+	}
+	m.log.Printf("USB 上行已就绪: %s = %s", usb, m.ifaceIPv4(ctx, usb))
+
+	// Bring the AP up on wlan0 with hostapd so NAT can point at the USB WAN.
+	_, _ = m.Run(ctx, 8*time.Second, "nmcli", "device", "set", apIface, "managed", "no")
+	if active := m.activeConnectionFor(ctx, apIface); active != "" {
+		_, _ = m.Run(ctx, 15*time.Second, "nmcli", "connection", "down", active)
+	}
+	prefix, err := netutil.MaskSize(cfg.LAN.Netmask)
+	if err != nil {
+		m.restoreUSBProfile(ctx, cfg)
+		return err
+	}
+	channel := cfg.Wifi.Channel
+	if channel <= 0 {
+		channel = m.bestAPChannel(ctx, apIface)
+	}
+	if channel <= 0 {
+		channel = 6
+	}
+	band := "bg"
+	if channel > 14 {
+		band = "a"
+	}
+	_, _ = m.Run(ctx, 8*time.Second, "ip", "addr", "flush", "dev", apIface, "scope", "global")
+	if _, err := m.Run(ctx, 8*time.Second, "ip", "addr", "add", fmt.Sprintf("%s/%d", cfg.LAN.IP, prefix), "dev", apIface); err != nil {
+		m.restoreUSBProfile(ctx, cfg)
+		return fmt.Errorf("设置热点地址失败: %w", err)
+	}
+	_, _ = m.Run(ctx, 8*time.Second, "ip", "link", "set", apIface, "up")
+
+	conf := buildHostapdConfig(cfg, apIface, cfg.Wifi.SSID, cfg.Wifi.Password, cfg.Wifi.Security, band,
+		channel, cfg.Wifi.Hidden, cfg.Wifi.MaxClients, cfg.Wifi.Country)
+	if err := m.WriteFile(bridgeHostapdConf, []byte(conf), 0o600); err != nil {
+		m.restoreUSBProfile(ctx, cfg)
+		return fmt.Errorf("写入 hostapd 配置失败: %w", err)
+	}
+	if err := m.WriteFile(bridgeDNSMasqConf, []byte(buildDNSMasqConfig(cfg, apIface, bridgeDNSMasqConf, bridgeLeaseFile)), 0o600); err != nil {
+		m.restoreUSBProfile(ctx, cfg)
+		return fmt.Errorf("写入 dnsmasq 配置失败: %w", err)
+	}
+	_, _ = m.Run(ctx, 8*time.Second, "sysctl", "-w", "net.ipv4.ip_forward=1")
+	if err := m.applyBridgeNAT(ctx, apIface, usb); err != nil {
+		m.stopBridgeServices(ctx)
+		m.nftDelete(ctx, nftBridgeTable)
+		m.restoreUSBProfile(ctx, cfg)
+		return err
+	}
+	if err := m.startBridgeAP(ctx); err != nil {
+		m.nftDelete(ctx, nftBridgeTable)
+		m.restoreUSBProfile(ctx, cfg)
+		return err
+	}
+	if !sleepCtx(ctx, 2*time.Second) {
+		m.stopBridgeServices(ctx)
+		m.nftDelete(ctx, nftBridgeTable)
+		m.restoreUSBProfile(ctx, cfg)
+		return ctx.Err()
+	}
+	if !m.bridgeAPRunning(ctx) {
+		m.stopBridgeServices(ctx)
+		m.nftDelete(ctx, nftBridgeTable)
+		m.restoreUSBProfile(ctx, cfg)
+		return fmt.Errorf("hostapd 启动失败，已恢复原来的 USB 网络")
+	}
+
+	m.bridge = bridgeRuntime{
+		Active:        true,
+		Mode:          "usb_ap",
+		APInterface:   apIface,
+		UpstreamIface: usb,
+		UpstreamSSID:  "USB 共享",
+		Channel:       channel,
+		StartedAt:     time.Now(),
+	}
+	if err := m.Update(func(c *config.Config) error {
+		c.Wifi.Bridge.Enabled = true
+		return nil
+	}); err != nil {
+		m.log.Printf("保存 USB 上行共享状态失败: %v", err)
+	}
+	if err := m.syncBlockedSet(ctx); err != nil {
+		m.log.Printf("同步 MAC 黑名单失败: %v", err)
+	}
+	m.log.Printf("USB 转 WiFi 已启用: %s -> %s 信道 %d", apIface, usb, channel)
+	return nil
+}
+
+// vpnDialOK reports whether a TCP connection to addr succeeds within timeout.
+func vpnDialOK(ctx context.Context, addr string, timeout time.Duration) bool {
+	d := &net.Dialer{Timeout: timeout}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// restoreUSBProfile brings back the NetworkManager profile that serves the USB
+// LAN (device as DHCP server) after usb_ap mode is left.
+func (m *Manager) restoreUSBProfile(ctx context.Context, cfg *config.Config) {
+	name := strings.TrimSpace(cfg.Wifi.Bridge.USBConnection)
+	if name == "" {
+		name = "USB"
+	}
+	_, _ = m.Run(ctx, 10*time.Second, "nmcli", "connection", "modify", name, "connection.autoconnect", "yes")
+	if _, err := m.Run(ctx, 40*time.Second, "nmcli", "connection", "up", name); err != nil {
+		m.log.Printf("恢复 USB 网络 %s 失败: %v", name, err)
+	}
 }
 
 func (m *Manager) enableBridgeLocked(ctx context.Context) error {
@@ -672,6 +934,7 @@ func (m *Manager) disableBridge(ctx context.Context, restore bool) error {
 func (m *Manager) teardownBridgeLocked(ctx context.Context, cfg *config.Config) {
 	br := m.bridge
 	usbMode := br.Mode == "usb" || (br.Mode == "" && cfg.Wifi.Bridge.Mode == "usb")
+	usbAP := br.Mode == "usb_ap" || (br.Mode == "" && cfg.Wifi.Bridge.Mode == "usb_ap")
 	m.stopBridgeServices(ctx)
 	m.nftDelete(ctx, nftBridgeTable)
 	if cfg.Wifi.Bridge.UpstreamConnection != "" {
@@ -681,6 +944,21 @@ func (m *Manager) teardownBridgeLocked(ctx context.Context, cfg *config.Config) 
 	}
 	if usbMode {
 		// usb0 is the LAN side in USB sharing mode; never flush its address.
+		m.bridge = bridgeRuntime{LastError: br.LastError}
+		return
+	}
+	if usbAP {
+		// usb0 was the WAN side: hand the USB LAN back to the PC.
+		apIface := br.APInterface
+		if apIface == "" {
+			apIface = cfg.Wifi.Interface
+		}
+		if apIface != "" {
+			_, _ = m.Run(ctx, 5*time.Second, "ip", "addr", "flush", "dev", apIface, "scope", "global")
+			_, _ = m.Run(ctx, 5*time.Second, "ip", "link", "set", apIface, "down")
+			_, _ = m.Run(ctx, 8*time.Second, "nmcli", "device", "set", apIface, "managed", "yes")
+		}
+		m.restoreUSBProfile(ctx, cfg)
 		m.bridge = bridgeRuntime{LastError: br.LastError}
 		return
 	}
@@ -731,6 +1009,17 @@ func (m *Manager) resumeBridge(ctx context.Context) {
 	}
 	cfg := m.Config()
 	if !cfg.Wifi.Bridge.Enabled {
+		return
+	}
+	if cfg.Wifi.Bridge.Mode == "usb_ap" {
+		if m.CellularDataActive(ctx) {
+			m.log.Printf("蜂窝数据已开启，跳过恢复 USB 转 WiFi 共享")
+			return
+		}
+		m.log.Printf("恢复上次启用的 USB 转 WiFi 共享")
+		if err := m.EnableBridge(ctx); err != nil {
+			m.log.Printf("恢复 USB 转 WiFi 共享失败: %v", err)
+		}
 		return
 	}
 	if strings.TrimSpace(cfg.Wifi.Bridge.UpstreamSSID) == "" {

@@ -31,6 +31,9 @@ const (
 	nftFilterTable    = "msm8916d_filter"
 	apNMConnection    = "msm8916d-ap"
 	modemNMConnection = "msm8916d-modem"
+	// usbUpstreamProfile is the temporary NetworkManager profile used when the
+	// USB port becomes the WAN side (PC shares its internet to the device).
+	usbUpstreamProfile = "msm8916d-usb-up"
 )
 
 // Options configures a Manager.
@@ -68,6 +71,11 @@ type Manager struct {
 	// tproxyMu guards whether the transparent proxy rules are installed.
 	tproxyMu sync.Mutex
 	tproxyOn bool
+
+	// vpnWatchMu guards the VPN health watchdog (auto-stop after downtime).
+	vpnWatchMu      sync.Mutex
+	vpnDownSince    time.Time
+	vpnAutoStopNote string
 
 	// autoMu serialises the cellular-data/bridge automatic state machine.
 	autoMu sync.Mutex
@@ -282,7 +290,9 @@ func (m *Manager) Start(ctx context.Context) {
 	go m.watchdogLoop(ctx)
 	go m.smsForwardLoop(ctx)
 	go m.resumeBridge(ctx)
+	go m.resumeVPN(ctx)
 	go m.resumeTransparent(ctx)
+	go m.vpnWatchLoop(ctx)
 	go m.applyFlightModeOnStart(ctx)
 	go m.ledLoop(ctx)
 }

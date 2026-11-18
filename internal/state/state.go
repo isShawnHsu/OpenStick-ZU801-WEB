@@ -54,6 +54,10 @@ type SMSForwardState struct {
 type VPNState struct {
 	Nodes    []VPNNode `json:"nodes,omitempty"`
 	ActiveID string    `json:"active_id,omitempty"`
+	// Running records the operator's last intent so the service can restore it
+	// after a reboot (or keep it stopped when it was stopped deliberately).
+	Running      bool `json:"running,omitempty"`
+	RunningKnown bool `json:"running_known,omitempty"`
 }
 
 // VPNNode is one imported vmess/vless endpoint.

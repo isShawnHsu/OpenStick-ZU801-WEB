@@ -31,8 +31,8 @@ function blockingUnlock(u) {
   return u !== 'sim-pin2' && u !== 'sim-puk2';
 }
 
-function field(label, inner, hint) {
-  return '<label class="field"><span>' + esc(label) + '</span>' + inner +
+function field(label, inner, hint, cls) {
+  return '<label class="field' + (cls ? ' ' + cls : '') + '"><span>' + esc(label) + '</span>' + inner +
     (hint ? '<small class="muted">' + esc(hint) + '</small>' : '') + '</label>';
 }
 
@@ -196,12 +196,12 @@ function dashboardView(d) {
 
   return pageHead(t('dash.title'), sys.hostname || '', '<button class="ghost" data-action="reload">' + esc(t('dash.refresh')) + '</button>') +
     '<div class="grid">' +
-    card(t('dash.cellular'), cellBody) +
-    card(t('dash.sim'), simBody) +
     card(t('dash.wifi'), wifiBody) +
     card(t('dash.bridge'), bridgeBody) +
     card(t('dash.system'), sysBody) +
     card(t('dash.traffic'), trBody) +
+    card(t('dash.cellular'), cellBody) +
+    card(t('dash.sim'), simBody) +
     '</div>' +
     card(t('dash.interfaces'), ifaceTable(net), '<a class="btn ghost small" href="#/network">' + esc(t('common.details')) + '</a>') +
     card(t('dash.quick'), '<div class="quick">' +
@@ -520,6 +520,7 @@ function wifiView(r) {
       '</div>' +
       check('hidden', c.hidden, t('wifi.hidden')) +
       check('apply_on_start', c.apply_on_start, t('wifi.applyOnStart')) +
+      '<p class="muted small">' + esc(t('wifi.channelHint')) + '</p>' +
       '<p class="muted small">' + esc(t('wifi.wpa3Hint')) + '</p>' +
       '<p class="muted small">' + esc(t('wifi.note')) + '</p>' +
       '<div class="btn-row"><button class="primary" type="submit">' + esc(t('wifi.apply')) + '</button>' +
@@ -541,14 +542,17 @@ function bridgeView(r) {
       }).join('') + '</div>'
     : '<p class="muted">' + esc(t('bridge.scanEmpty')) + '</p>';
 
+  var savedMode = c.mode === 'usb_ap' ? 'usb_ap' : 'usb';
   var capBody = '<div class="status-line">' +
     (cap.supported ? pill(t('bridge.supported'), 'ok') : pill(t('bridge.unsupported'), 'warn')) + '</div>' +
-    '<p class="muted">' + esc(cap.reason || '') + '</p>' +
+    '<p class="muted" data-role="bridge-cap-desc">' + esc(savedMode === 'usb_ap' ? t('bridge.workUsbAp') : t('bridge.workUsb')) + '</p>' +
+    (cap.supported ? '' : '<p class="muted small">' + esc(cap.reason || '') + '</p>') +
     (cap.interfaces && cap.interfaces.length ? '<p class="muted small">' + esc(cap.interfaces.join(', ')) + '</p>' : '') +
-    '<p class="small muted">' + esc(t('bridge.warning')) + '</p>';
+    '<p class="small muted" data-role="bridge-cap-warn">' + esc(savedMode === 'usb_ap' ? t('bridge.warnUsbAp') : t('bridge.warning')) + '</p>';
 
   var statusBody = '<div class="status-line">' + (st.active ? pill(t('bridge.active'), 'ok') : pill(t('bridge.inactive'), 'bad')) + '</div>' +
     '<div class="grid two">' +
+    kv(t('bridge.mode'), esc(st.mode === 'usb_ap' ? t('bridge.modeUsbAp') : st.mode === 'ap_sta' ? t('bridge.modeApSta') : t('bridge.modeUsb'))) +
     kv(t('bridge.upstream'), esc(st.upstream_ssid || c.upstream_ssid || '-')) +
     kv(t('bridge.upstream') + ' IP', esc(st.upstream_ip || '-')) +
     kv(t('bridge.downstream'), esc(st.downstream_interface || st.ap_interface || '-')) +
@@ -584,22 +588,46 @@ function bridgeView(r) {
     ? '<button class="danger" data-action="bridge-disable">' + esc(t('bridge.disable')) + '</button>'
     : '<button class="primary" data-action="bridge-enable">' + esc(t('bridge.enable')) + '</button>';
 
+  var ua = navigator.userAgent || '';
+  var isPhone = /Android|iPhone|iPad|iPod/i.test(ua);
+  var clientOS = isPhone ? '' : (/Windows/i.test(ua) ? 'Windows'
+    : (/Mac OS X|Macintosh/i.test(ua) ? 'macOS'
+      : (/Linux|X11/i.test(ua) ? 'Linux' : '')));
+  var pcShareCard = '<div data-role="bridge-pcshare">' + card(t('bridge.pcShare'),
+    '<div class="status-line">' + esc(t('bridge.osDetected')) + ' <strong>' + esc(clientOS || t('bridge.osUnknown')) + '</strong></div>' +
+    (isPhone ? '<p class="muted small">' + esc(t('bridge.osPhoneHint')) + '</p>' : '') +
+    '<p class="muted small">' + esc(t('bridge.pcShareDesc')) + '</p>' +
+    '<p class="small"><strong>Windows</strong> · ' + esc(t('bridge.winShareHint')) + '</p>' +
+    '<div class="btn-row">' +
+    '<a class="btn" href="/static/tools/share-on.cmd" download>' + esc(t('bridge.dlWinOn')) + '</a>' +
+    '<a class="btn ghost" href="/static/tools/share-off.cmd" download>' + esc(t('bridge.dlWinOff')) + '</a>' +
+    '</div>' +
+    '<p class="small"><strong>Linux</strong> · ' + esc(t('bridge.linuxShareHint')) + '</p>' +
+    '<div class="btn-row">' +
+    '<a class="btn ghost" href="/static/tools/share-on-linux.sh" download>' + esc(t('bridge.dlLinuxOn')) + '</a>' +
+    '<a class="btn ghost" href="/static/tools/share-off-linux.sh" download>' + esc(t('bridge.dlLinuxOff')) + '</a>' +
+    '</div>' +
+    '<p class="small"><strong>macOS</strong> · ' + esc(t('bridge.macShareHint')) + '</p>') + '</div>';
+
   return pageHead(t('bridge.title'), t('bridge.desc'), headActions) +
     card(t('bridge.capability'), capBody) +
     card(t('bridge.status'), statusBody) +
     card(t('bridge.portal'), portalBody) +
-    card(t('bridge.title'), '<form data-form="bridge" class="stack">' +
+    pcShareCard +
+    card(t('bridge.shareCard'), '<form data-form="bridge" data-saved-mode="' + attr(savedMode) + '" class="stack">' +
       '<div class="form-grid">' +
-      field(t('bridge.upstreamSsid'), txt('upstream_ssid', c.upstream_ssid || '', 'Upstream WiFi')) +
-      field(t('bridge.upstreamPassword'), '<input type="text" name="upstream_password" value="' + attr(c.upstream_password || '') + '">') +
-      field(t('bridge.upstreamSecurity'), sel('upstream_security', c.upstream_security || 'wpa2', [['wpa2', t('wifi.wpa2')], ['open', t('wifi.open')], ['auto', 'Auto']])) +
-      field(t('bridge.downstream'), '<input type="text" name="downstream_interface" value="' + attr(c.downstream_interface || 'usb0') + '" placeholder="usb0">') +
-      field(t('bridge.routeMetric'), '<input type="number" name="route_metric" min="0" max="99999" value="' + attr(c.route_metric || 50) + '">') +
+      field(t('bridge.mode'), sel('mode', c.mode === 'usb_ap' ? 'usb_ap' : 'usb', [['usb', t('bridge.modeUsb')], ['usb_ap', t('bridge.modeUsbAp')]])) +
+      field(t('bridge.upstreamSsid'), txt('upstream_ssid', c.upstream_ssid || '', 'Upstream WiFi'), '', 'bridge-wifi-only') +
+      field(t('bridge.upstreamPassword'), '<input type="text" name="upstream_password" value="' + attr(c.upstream_password || '') + '">', '', 'bridge-wifi-only') +
+      field(t('bridge.upstreamSecurity'), sel('upstream_security', c.upstream_security || 'wpa2', [['wpa2', t('wifi.wpa2')], ['open', t('wifi.open')], ['auto', 'Auto']]), '', 'bridge-wifi-only') +
+      field(t('bridge.downstream'), '<input type="text" name="downstream_interface" value="' + attr(c.downstream_interface || 'usb0') + '" placeholder="usb0">', '', 'bridge-iface-field') +
+      field(t('bridge.routeMetric'), '<input type="number" name="route_metric" min="0" max="99999" value="' + attr(c.route_metric || 50) + '">', '', 'bridge-wifi-only') +
       '</div>' +
       check('auto', c.auto, t('bridge.auto')) +
       '<p class="muted small">' + esc(t('bridge.autoNote')) + '</p>' +
+      '<p class="muted small bridge-usbap-only">' + esc(t('bridge.usbApHint')) + '</p>' +
       '<div class="btn-row"><button class="primary" type="submit">' + esc(t('common.save')) + '</button>' +
-      '<button class="ghost" type="button" data-action="bridge-scan">' + esc(t('bridge.scan')) + '</button></div></form>') +
+      '<button class="ghost bridge-wifi-only" type="button" data-action="bridge-scan">' + esc(t('bridge.scan')) + '</button></div></form>') +
     card(t('bridge.scan'), scanHtml);
 }
 
@@ -728,6 +756,37 @@ function vpnNodeSync(el) {
   if (cred) {
     cred.textContent = (proto === 'trojan' || proto === 'ss') ? t('vpn.password') : t('vpn.userId');
   }
+}
+
+// initBridgeForm shows only the fields the selected sharing mode actually uses.
+function initBridgeForm(root) {
+  var form = root ? root.querySelector('form[data-form="bridge"]') : null;
+  if (!form) return;
+  var sel = form.querySelector('select[name="mode"]');
+  function apply() {
+    var mode = sel ? sel.value : 'usb';
+    form.querySelectorAll('.bridge-wifi-only').forEach(function (el) {
+      el.style.display = mode === 'usb_ap' ? 'none' : '';
+    });
+    form.querySelectorAll('.bridge-usbap-only').forEach(function (el) {
+      el.style.display = mode === 'usb_ap' ? '' : 'none';
+    });
+    var label = form.querySelector('.bridge-iface-field > span');
+    if (label) label.textContent = mode === 'usb_ap' ? t('bridge.usbInterface') : t('bridge.downstream');
+    var saved = form.getAttribute('data-saved-mode') || 'usb';
+    var desc = document.querySelector('[data-role="bridge-cap-desc"]');
+    if (desc) {
+      var text = mode === 'usb_ap' ? t('bridge.workUsbAp') : t('bridge.workUsb');
+      if (mode !== saved) text += ' ' + t('bridge.notSaved');
+      desc.textContent = text;
+    }
+    var warn = document.querySelector('[data-role="bridge-cap-warn"]');
+    if (warn) warn.textContent = mode === 'usb_ap' ? t('bridge.warnUsbAp') : t('bridge.warning');
+    var pc = document.querySelector('[data-role="bridge-pcshare"]');
+    if (pc) pc.style.display = mode === 'usb_ap' ? '' : 'none';
+  }
+  if (sel) sel.addEventListener('change', apply);
+  apply();
 }
 
 function initVPNForms(root) {
@@ -882,6 +941,7 @@ function vpnView(st) {
     (st.installed ? '' : '<div class="note warn">' + esc(t('vpn.installHint')) + '</div>') +
 
     card(t('vpn.status'),
+      (st.auto_stop_note ? '<div class="note warn">' + esc(st.auto_stop_note) + '</div>' : '') +
       '<div class="status-line">' +
       (st.active ? pill(t('vpn.running'), 'ok') : pill(t('vpn.stopped'), 'bad')) +
       '<strong>' + esc(curLine) + '</strong>' +

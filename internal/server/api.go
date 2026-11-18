@@ -536,6 +536,9 @@ func (s *Server) apiBridgeSave(w http.ResponseWriter, r *http.Request) {
 		if body.APInterface == "" {
 			body.APInterface = old.APInterface
 		}
+		if body.USBConnection == "" {
+			body.USBConnection = old.USBConnection
+		}
 		body.Enabled = old.Enabled
 		body.PreviousAPConnection = old.PreviousAPConnection
 		c.Wifi.Bridge = body
@@ -545,7 +548,21 @@ func (s *Server) apiBridgeSave(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ok(w, s.m.Config().Wifi.Bridge)
+	// A running bridge is restarted so the saved settings take effect at once.
+	applied := false
+	applyErr := ""
+	if s.m.BridgeActive() {
+		if err := s.m.RestartBridge(r.Context()); err != nil {
+			applyErr = err.Error()
+		} else {
+			applied = true
+		}
+	}
+	ok(w, map[string]any{
+		"config":      s.m.Config().Wifi.Bridge,
+		"applied":     applied,
+		"apply_error": applyErr,
+	})
 }
 
 func (s *Server) apiBridgeEnable(w http.ResponseWriter, r *http.Request) {
@@ -902,15 +919,15 @@ func (s *Server) apiVPNControl(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiVPNConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Binary     string `json:"binary"`
-		ConfigPath string `json:"config_path"`
-		LogPath    string `json:"log_path"`
-		SocksPort  int    `json:"socks_port"`
-		HTTPPort   int    `json:"http_port"`
-		AllowLAN   bool   `json:"allow_lan"`
-		RoutingMode string `json:"routing_mode"`
-		Transparent bool   `json:"transparent"`
-		TransparentPort int `json:"transparent_port"`
+		Binary          string `json:"binary"`
+		ConfigPath      string `json:"config_path"`
+		LogPath         string `json:"log_path"`
+		SocksPort       int    `json:"socks_port"`
+		HTTPPort        int    `json:"http_port"`
+		AllowLAN        bool   `json:"allow_lan"`
+		RoutingMode     string `json:"routing_mode"`
+		Transparent     bool   `json:"transparent"`
+		TransparentPort int    `json:"transparent_port"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())

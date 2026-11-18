@@ -46,29 +46,31 @@ type VPNNodeView struct {
 
 // VPNStatus is the VPN page payload.
 type VPNStatus struct {
-	Installed   bool          `json:"installed"`
-	Version     string        `json:"version"`
-	Binary      string        `json:"binary"`
-	ConfigPath  string        `json:"config_path"`
-	ServiceName string        `json:"service_name"`
-	Active      bool          `json:"active"`
-	Enabled     bool          `json:"enabled"`
-	SocksPort   int           `json:"socks_port"`
-	HTTPPort    int           `json:"http_port"`
-	AllowLAN    bool          `json:"allow_lan"`
-	LogPath     string        `json:"log_path"`
-	RoutingMode string        `json:"routing_mode"`
-	GeoPath     string        `json:"geo_path"`
-	GeoReady    bool          `json:"geo_ready"`
-	Transparent bool          `json:"transparent"`
-	TransparentPort int       `json:"transparent_port"`
-	TransparentOn   bool      `json:"transparent_on"`
-	GeoIPSize   int64         `json:"geoip_bytes"`
-	GeoSiteSize int64         `json:"geosite_bytes"`
+	Installed       bool   `json:"installed"`
+	Version         string `json:"version"`
+	Binary          string `json:"binary"`
+	ConfigPath      string `json:"config_path"`
+	ServiceName     string `json:"service_name"`
+	Active          bool   `json:"active"`
+	Enabled         bool   `json:"enabled"`
+	SocksPort       int    `json:"socks_port"`
+	HTTPPort        int    `json:"http_port"`
+	AllowLAN        bool   `json:"allow_lan"`
+	LogPath         string `json:"log_path"`
+	RoutingMode     string `json:"routing_mode"`
+	GeoPath         string `json:"geo_path"`
+	GeoReady        bool   `json:"geo_ready"`
+	Transparent     bool   `json:"transparent"`
+	TransparentPort int    `json:"transparent_port"`
+	TransparentOn   bool   `json:"transparent_on"`
+	// AutoStopNote explains why the health watchdog stopped the VPN.
+	AutoStopNote string        `json:"auto_stop_note,omitempty"`
+	GeoIPSize    int64         `json:"geoip_bytes"`
+	GeoSiteSize  int64         `json:"geosite_bytes"`
 	ConfigExists bool          `json:"config_exists"`
-	Live        *VPNLive       `json:"live,omitempty"`
-	Nodes       []VPNNodeView `json:"nodes"`
-	Error       string        `json:"error,omitempty"`
+	Live         *VPNLive      `json:"live,omitempty"`
+	Nodes        []VPNNodeView `json:"nodes"`
+	Error        string        `json:"error,omitempty"`
 }
 
 // VPNLiveInbound is one inbound entry of the active config file.
@@ -98,30 +100,31 @@ type VPNLiveOutbound struct {
 // VPNLive is what the config file on disk actually contains, independent of the
 // settings the page keeps in its own config.
 type VPNLive struct {
-	Valid     bool              `json:"valid"`
-	Inbounds  []VPNLiveInbound  `json:"inbounds"`
-	Outbound  *VPNLiveOutbound  `json:"outbound,omitempty"`
-	Smart     bool              `json:"smart"`
-	RuleCount int               `json:"rule_count"`
-	Error     string            `json:"error,omitempty"`
+	Valid     bool             `json:"valid"`
+	Inbounds  []VPNLiveInbound `json:"inbounds"`
+	Outbound  *VPNLiveOutbound `json:"outbound,omitempty"`
+	Smart     bool             `json:"smart"`
+	RuleCount int              `json:"rule_count"`
+	Error     string           `json:"error,omitempty"`
 }
 
 // VPNStatus collects the current v2ray state.
 func (m *Manager) VPNStatus(ctx context.Context) *VPNStatus {
 	cfg := m.Config().VPN
 	st := &VPNStatus{
-		Binary:      cfg.Binary,
-		ConfigPath:  cfg.ConfigPath,
-		ServiceName: cfg.ServiceName,
-		SocksPort:   cfg.SocksPort,
-		HTTPPort:    cfg.HTTPPort,
-		AllowLAN:    cfg.AllowLAN,
-		LogPath:     cfg.LogPath,
-		RoutingMode: cfg.RoutingMode,
-		GeoPath:     cfg.GeoPath,
-		Transparent: cfg.Transparent,
+		Binary:          cfg.Binary,
+		ConfigPath:      cfg.ConfigPath,
+		ServiceName:     cfg.ServiceName,
+		SocksPort:       cfg.SocksPort,
+		HTTPPort:        cfg.HTTPPort,
+		AllowLAN:        cfg.AllowLAN,
+		LogPath:         cfg.LogPath,
+		RoutingMode:     cfg.RoutingMode,
+		GeoPath:         cfg.GeoPath,
+		Transparent:     cfg.Transparent,
 		TransparentPort: cfg.TransparentPort,
 		TransparentOn:   m.TransparentActive(),
+		AutoStopNote:    m.VPNAutoStopNote(),
 	}
 	if _, err := os.Stat(cfg.ConfigPath); err == nil {
 		st.ConfigExists = true
@@ -456,6 +459,7 @@ func (m *Manager) ControlVPN(ctx context.Context, action string) error {
 		if action == "stop" {
 			if !active {
 				m.removeTransparentProxy(ctx)
+				m.setVPNIntent(false)
 				return nil
 			}
 		} else if active {
@@ -464,6 +468,8 @@ func (m *Manager) ControlVPN(ctx context.Context, action string) error {
 			if err := m.applyTransparentProxy(ctx); err != nil {
 				return err
 			}
+			m.setVPNIntent(true)
+			m.clearVPNAutoStopNote()
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -478,6 +484,53 @@ func (m *Manager) ControlVPN(ctx context.Context, action string) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// setVPNIntent persists whether the operator left the VPN running so the same
+// state can be restored after a reboot.
+func (m *Manager) setVPNIntent(running bool) {
+	m.store.Update(func(s *state.State) {
+		s.VPN.Running = running
+		s.VPN.RunningKnown = true
+	})
+	if err := m.store.Save(); err != nil {
+		m.log.Printf("保存 VPN 状态失败: %v", err)
+	}
+}
+
+// resumeVPN restores the state recorded by the last start/stop, so a reboot
+// neither silently starts a VPN the user stopped nor leaves a wanted one off.
+func (m *Manager) resumeVPN(ctx context.Context) {
+	if !m.slept(8 * time.Second) {
+		return
+	}
+	snap := m.store.Snapshot()
+	if !snap.VPN.RunningKnown {
+		// First run after the upgrade: adopt whatever the unit is doing now so
+		// later reboots follow the same intent.
+		m.setVPNIntent(m.unitActive(ctx, m.Config().VPN.ServiceName))
+		return
+	}
+	cfg := m.Config().VPN
+	if snap.VPN.Running {
+		if m.unitActive(ctx, cfg.ServiceName) {
+			return
+		}
+		if _, err := m.Run(ctx, 40*time.Second, "systemctl", "start", cfg.ServiceName); err != nil {
+			m.log.Printf("按上次状态启动 VPN 失败: %v", err)
+			return
+		}
+		m.log.Printf("按上次状态启动 VPN: %s", cfg.ServiceName)
+		return
+	}
+	if m.unitActive(ctx, cfg.ServiceName) {
+		if _, err := m.Run(ctx, 40*time.Second, "systemctl", "stop", cfg.ServiceName); err != nil {
+			m.log.Printf("按上次状态停止 VPN 失败: %v", err)
+			return
+		}
+		m.log.Printf("上次 VPN 为关闭状态，已停止 %s", cfg.ServiceName)
+	}
+	m.removeTransparentProxy(ctx)
 }
 
 // VPNLogs returns the tail of the v2ray error log.

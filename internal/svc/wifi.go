@@ -309,8 +309,12 @@ func (m *Manager) applyWifiNM(ctx context.Context, cfg *config.Config) error {
 		"ipv4.dns", strings.Join(cfg.LAN.DNS, ","),
 		"ipv6.method", "ignore",
 	}
-	if cfg.Wifi.Channel > 0 {
-		args = append(args, "802-11-wireless.channel", strconv.Itoa(cfg.Wifi.Channel))
+	channel := cfg.Wifi.Channel
+	if channel <= 0 {
+		channel = m.bestAPChannel(ctx, iface)
+	}
+	if channel > 0 {
+		args = append(args, "802-11-wireless.channel", strconv.Itoa(channel))
 	} else {
 		// NetworkManager rejects the numeric value 0; an empty value clears
 		// the channel and restores automatic selection.
@@ -404,8 +408,15 @@ func (m *Manager) applyWifiHostapd(ctx context.Context, cfg *config.Config) erro
 		_, _ = m.Run(ctx, 8*time.Second, "nmcli", "device", "set", iface, "managed", "no")
 	}
 	m.stopStandaloneAP(ctx)
+	channel := cfg.Wifi.Channel
+	if channel <= 0 {
+		channel = m.bestAPChannel(ctx, iface)
+	}
+	if channel <= 0 {
+		channel = 6
+	}
 	conf := buildHostapdConfig(cfg, iface, cfg.Wifi.SSID, cfg.Wifi.Password, cfg.Wifi.Security, cfg.Wifi.Band,
-		cfg.Wifi.Channel, cfg.Wifi.Hidden, cfg.Wifi.MaxClients, cfg.Wifi.Country)
+		channel, cfg.Wifi.Hidden, cfg.Wifi.MaxClients, cfg.Wifi.Country)
 	if err := m.WriteFile(cfg.Wifi.HostapdConfig, []byte(conf), 0o600); err != nil {
 		return fmt.Errorf("写入 hostapd 配置失败: %w", err)
 	}

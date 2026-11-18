@@ -119,9 +119,13 @@ type WifiConfig struct {
 
 // BridgeConfig controls the RaspAP-style AP-STA WiFi relay.
 type BridgeConfig struct {
-	Mode                 string `json:"mode"`                 // usb | ap_sta
-	DownstreamInterface  string `json:"downstream_interface"` // usb0
-	Enabled              bool   `json:"enabled"`
+	Mode                string `json:"mode"`                 // usb | ap_sta | usb_ap
+	DownstreamInterface string `json:"downstream_interface"` // usb0（USB 共享时是下游，USB 上行时是上游）
+	Enabled             bool   `json:"enabled"`
+	// USBConnection is the NetworkManager profile that provides the USB LAN
+	// (device as DHCP server). It is switched off in usb_ap mode and restored
+	// when the mode is left again.
+	USBConnection        string `json:"usb_connection"`
 	Auto                 bool   `json:"auto"`
 	Force                bool   `json:"force"`
 	APInterface          string `json:"ap_interface"` // "" = auto (uap0 or wlan1)
@@ -410,6 +414,15 @@ func (c *Config) Normalize() {
 	if c.Wifi.Bridge.Mode == "" {
 		c.Wifi.Bridge.Mode = "usb"
 	}
+	switch c.Wifi.Bridge.Mode {
+	case "usb", "ap_sta", "usb_ap":
+	default:
+		c.Wifi.Bridge.Mode = "usb"
+	}
+	c.Wifi.Bridge.USBConnection = strings.TrimSpace(c.Wifi.Bridge.USBConnection)
+	if c.Wifi.Bridge.USBConnection == "" {
+		c.Wifi.Bridge.USBConnection = "USB"
+	}
 	c.Wifi.Bridge.DownstreamInterface = strings.TrimSpace(c.Wifi.Bridge.DownstreamInterface)
 	if c.Wifi.Bridge.DownstreamInterface == "" {
 		c.Wifi.Bridge.DownstreamInterface = "usb0"
@@ -637,7 +650,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("国家代码必须是两位字母")
 	}
 	switch c.Wifi.Bridge.Mode {
-	case "usb", "ap_sta":
+	case "usb", "ap_sta", "usb_ap":
 	default:
 		return fmt.Errorf("桥接模式无效")
 	}
