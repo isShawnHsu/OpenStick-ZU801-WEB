@@ -12,7 +12,17 @@ import (
 // of channels 1/6/11. The caller decides what to do when it returns 0 (scan
 // failed), e.g. fall back to a fixed default.
 func (m *Manager) bestAPChannel(ctx context.Context, iface string) int {
-	if iface == "" || !m.Available("iw") {
+	if iface == "" {
+		return 0
+	}
+	// NetworkManager owns the interface when it creates the AP, and it already
+	// keeps a scan cache: asking nmcli avoids taking the link down under it.
+	if m.Available("nmcli") {
+		if counts := m.scanChannelsNM(ctx, iface); len(counts) > 0 {
+			return m.pickChannel(counts)
+		}
+	}
+	if !m.Available("iw") {
 		return 0
 	}
 	// Scanning needs a managed, up interface; hostapd sets AP mode later.
@@ -23,13 +33,43 @@ func (m *Manager) bestAPChannel(ctx context.Context, iface string) int {
 	if strings.TrimSpace(out) == "" {
 		return 0
 	}
-
 	counts := countAPChannels(out)
 	if len(counts) == 0 {
 		return 0
 	}
-	// Overlap on 2.4 GHz is roughly +-4 channels; weight the direct channel
-	// highest and neighbours progressively less.
+	return m.pickChannel(counts)
+}
+
+// scanChannelsNM counts APs per channel using NetworkManager's scan results.
+func (m *Manager) scanChannelsNM(ctx context.Context, iface string) map[int]int {
+	_, _ = m.Run(ctx, 20*time.Second, "nmcli", "device", "wifi", "rescan", "ifname", iface)
+	if !sleepCtx(ctx, 3*time.Second) {
+		return nil
+	}
+	out := m.RunTry(ctx, 15*time.Second, "nmcli", "-t", "-f", "CHAN", "device", "wifi", "list", "ifname", iface)
+	if strings.TrimSpace(out) == "" {
+		return nil
+	}
+	counts := map[int]int{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		ch, err := strconv.Atoi(line)
+		if err != nil || ch < 1 || ch > 14 {
+			continue
+		}
+		counts[ch]++
+	}
+	return counts
+}
+
+// pickChannel scores 1/6/11 by how crowded they (and neighbours) are.
+func (m *Manager) pickChannel(counts map[int]int) int {
+	if len(counts) == 0 {
+		return 0
+	}
 	score := func(ch int) float64 {
 		s := float64(counts[ch]) * 5
 		for d := 1; d <= 4; d++ {
@@ -45,7 +85,6 @@ func (m *Manager) bestAPChannel(ctx context.Context, iface string) int {
 			best, bestScore = ch, sc
 		}
 	}
-	// If the band is completely empty prefer 6 (works worldwide).
 	if bestScore == 0 {
 		best = 6
 	}

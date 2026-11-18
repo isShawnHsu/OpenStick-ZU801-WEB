@@ -175,6 +175,10 @@ func (s *Server) routes() http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		staticHandler.ServeHTTP(w, r)
 	}))
+	// Browsers and bookmark managers still probe /favicon.ico directly.
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/static/favicon.ico", http.StatusTemporaryRedirect)
+	})
 	mux.HandleFunc("/", s.serveSPA)
 
 	return s.security(s.accessLog(mux))

@@ -3,6 +3,7 @@ package svc
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -267,6 +268,18 @@ func (m *Manager) ApplyWifi(ctx context.Context) error {
 	return m.applyWifiHostapd(ctx, cfg)
 }
 
+// prepareNMDHCP stops the standalone dnsmasq service and removes the config
+// snippets written for the hostapd/bridge paths, so NetworkManager's own DHCP
+// server for a shared AP can bind its port.
+func (m *Manager) prepareNMDHCP(ctx context.Context) {
+	_ = os.Remove(usbDHCPConf)
+	_ = os.Remove(bridgeDNSMasqConf)
+	_ = os.Remove(m.Config().Wifi.DNSMasqConfig)
+	if m.Available("systemctl") && m.unitExists(ctx, "dnsmasq.service") {
+		_ = m.serviceAction(ctx, "stop", "dnsmasq.service")
+	}
+}
+
 func (m *Manager) applyWifiNM(ctx context.Context, cfg *config.Config) error {
 	if !m.Available("nmcli") {
 		return fmt.Errorf("未安装 NetworkManager（nmcli）")
@@ -277,6 +290,7 @@ func (m *Manager) applyWifiNM(ctx context.Context, cfg *config.Config) error {
 		conn = apNMConnection
 	}
 	m.stopStandaloneAP(ctx)
+	m.prepareNMDHCP(ctx)
 	_, _ = m.Run(ctx, 8*time.Second, "nmcli", "device", "set", iface, "managed", "yes")
 
 	exists := false
@@ -408,6 +422,8 @@ func (m *Manager) applyWifiHostapd(ctx context.Context, cfg *config.Config) erro
 		_, _ = m.Run(ctx, 8*time.Second, "nmcli", "device", "set", iface, "managed", "no")
 	}
 	m.stopStandaloneAP(ctx)
+	// This path runs its own dnsmasq; the service must not hold port 53.
+	m.prepareNMDHCP(ctx)
 	channel := cfg.Wifi.Channel
 	if channel <= 0 {
 		channel = m.bestAPChannel(ctx, iface)

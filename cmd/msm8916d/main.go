@@ -35,6 +35,7 @@ func main() {
 		debug      = flag.Bool("debug", false, "输出调试日志")
 		certFix    = flag.Bool("certfix", false, "检测并自动补全当前 VPN 节点的中间证书后退出")
 		vpnTest    = flag.Bool("vpntest", false, "通过本地代理做一次连通性测试并打印结果")
+		wifiApply  = flag.Bool("wifi-apply", false, "应用当前 WiFi 配置（启动热点）后退出")
 	)
 	flag.Parse()
 
@@ -158,6 +159,14 @@ func main() {
 		if !res.OK {
 			os.Exit(1)
 		}
+		return
+	}
+
+	if *wifiApply {
+		if err := m.ApplyWifi(ctx); err != nil {
+			logger.Fatalf("应用 WiFi 配置失败: %v", err)
+		}
+		fmt.Println("wifi applied")
 		return
 	}
 
